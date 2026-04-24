@@ -1,0 +1,218 @@
+import { Button, LineEdit, ComboBox, TextEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Card, PageTitle, SectionTitle, Caption, FieldLabel, FilterChip, TextLinkButton } from "widgets.slint";
+import { SettingsData } from "types.slint";
+
+export component SettingsPage inherits VerticalLayout {
+    in-out property <SettingsData> settings;
+    callback login;
+    callback logout;
+    callback pick-folder;
+    callback settings-changed;
+
+    padding-left: 32px;
+    padding-right: 32px;
+    padding-top: 32px;
+    padding-bottom: 32px;
+    spacing: 24px;
+
+    PageTitle {
+        title: "Settings";
+        subtitle: "Configure credentials, download path, and filters.";
+    }
+
+    ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+                alignment: start;
+                spacing: 16px;
+
+                // Credentials
+                Card {
+                    VerticalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        padding-top: 18px;
+                        padding-bottom: 18px;
+                        spacing: 12px;
+
+                        SectionTitle { title: "Credentials"; }
+                        Caption { label: "Stored in your OS credential store (Credential Manager · Keychain · Secret Service)."; }
+
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { label: "Username"; }
+                            LineEdit {
+                                text: root.settings.username;
+                                edited => {
+                                    root.settings.username = self.text;
+                                    root.settings.creds-dirty = true;
+                                    root.settings-changed();
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 6px;
+                            FieldLabel { label: "API key"; }
+                            LineEdit {
+                                text: root.settings.api-key;
+                                input-type: password;
+                                edited => {
+                                    root.settings.api-key = self.text;
+                                    root.settings.creds-dirty = true;
+                                    root.settings-changed();
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: end;
+
+                            Text {
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                                font-size: 12px;
+                                text: root.settings.creds-error != ""
+                                    ? "⚠  \{root.settings.creds-error}"
+                                    : (root.settings.creds-loaded ? "● logged in" : "");
+                                color: root.settings.creds-error != ""
+                                    ? Theme.danger
+                                    : Theme.success;
+                            }
+
+                            if root.settings.creds-loaded : TextLinkButton {
+                                label: "Log out";
+                                clicked => { root.logout(); }
+                            }
+                            Button {
+                                text: root.settings.creds-checking ? "Logging in…" : "Log in";
+                                primary: true;
+                                enabled: !root.settings.creds-checking
+                                    && root.settings.username != ""
+                                    && root.settings.api-key != "";
+                                clicked => { root.login(); }
+                            }
+                        }
+                    }
+                }
+
+                // Site
+                Card {
+                    VerticalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        padding-top: 18px;
+                        padding-bottom: 18px;
+                        spacing: 12px;
+
+                        SectionTitle { title: "Site"; }
+                        FieldLabel { label: "Target"; }
+                        ComboBox {
+                            model: ["e621.net (NSFW)", "e926.net (SFW)"];
+                            current-index: root.settings.site;
+                            selected(val) => {
+                                root.settings.site = self.current-index;
+                                root.settings-changed();
+                            }
+                        }
+                    }
+                }
+
+                // Folder
+                Card {
+                    VerticalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        padding-top: 18px;
+                        padding-bottom: 18px;
+                        spacing: 8px;
+
+                        SectionTitle { title: "Download folder"; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            LineEdit {
+                                text: root.settings.download-dir;
+                                edited => {
+                                    root.settings.download-dir = self.text;
+                                    root.settings-changed();
+                                }
+                            }
+                            Button {
+                                text: "Browse…";
+                                clicked => { root.pick-folder(); }
+                            }
+                        }
+                        Caption { label: "Files are saved as {root}/{artist}/{md5}.{ext}"; }
+                    }
+                }
+
+                // Rating
+                Card {
+                    VerticalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        padding-top: 18px;
+                        padding-bottom: 18px;
+                        spacing: 12px;
+
+                        SectionTitle { title: "Rating filter"; }
+                        Caption { label: "If all or none are selected, no rating filter is applied."; }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            FilterChip {
+                                label: "safe";
+                                selected: root.settings.rating-safe;
+                                toggled => {
+                                    root.settings.rating-safe = self.selected;
+                                    root.settings-changed();
+                                }
+                            }
+                            FilterChip {
+                                label: "questionable";
+                                selected: root.settings.rating-questionable;
+                                toggled => {
+                                    root.settings.rating-questionable = self.selected;
+                                    root.settings-changed();
+                                }
+                            }
+                            FilterChip {
+                                label: "explicit";
+                                selected: root.settings.rating-explicit;
+                                toggled => {
+                                    root.settings.rating-explicit = self.selected;
+                                    root.settings-changed();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Blacklist
+                Card {
+                    VerticalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        padding-top: 18px;
+                        padding-bottom: 18px;
+                        spacing: 12px;
+
+                        SectionTitle { title: "Blacklist tags"; }
+                        Caption { label: "One tag per line. Leading '-' is optional — negation is added automatically."; }
+
+                        TextEdit {
+                            height: 140px;
+                            text: root.settings.blacklist;
+                            edited => {
+                                root.settings.blacklist = self.text;
+                                root.settings-changed();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }

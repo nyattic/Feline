@@ -1,0 +1,137 @@
+import { Theme } from "theme.slint";
+
+export component Card inherits Rectangle {
+    background: Theme.surface-container;
+    border-radius: 16px;
+}
+
+export component FilterChip inherits Rectangle {
+    in property <string> label;
+    in-out property <bool> selected;
+    callback toggled;
+
+    height: 40px;
+    horizontal-stretch: 0;
+    border-radius: 20px;
+    background: root.selected
+        ? Theme.primary
+        : (area.has-hover ? Theme.surface-container-high.mix(Theme.primary, 8%) : Theme.surface-container-high);
+
+    area := TouchArea {
+        clicked => {
+            root.selected = !root.selected;
+            root.toggled();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: root.selected ? Theme.on-primary : Theme.text-muted;
+            font-size: 13px;
+            font-weight: root.selected ? 700 : 500;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked;
+
+    height: 40px;
+    border-radius: 20px;
+    background: root.selected
+        ? Theme.primary-container
+        : (area.has-hover ? Theme.surface-container-high : transparent);
+
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        color: root.selected ? Theme.text : Theme.text-muted;
+        font-size: 14px;
+        font-weight: 700;
+        x: 16px;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+export component TextLinkButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    min-width: 72px;
+    height: 40px;
+    border-radius: 20px;
+    background: area.has-hover && root.enabled
+        ? Theme.primary.with-alpha(0.08)
+        : transparent;
+    opacity: root.enabled ? 1.0 : 0.5;
+
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: Theme.primary;
+            font-size: 13px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component PageTitle {
+    in property <string> title;
+    in property <string> subtitle;
+
+    VerticalLayout {
+        spacing: 4px;
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: 26px;
+            font-weight: 700;
+        }
+        if root.subtitle != "" : Text {
+            text: root.subtitle;
+            color: Theme.text-muted;
+            font-size: 13px;
+        }
+    }
+}
+
+export component SectionTitle inherits Text {
+    in property <string> title <=> self.text;
+    color: Theme.text;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+export component Caption inherits Text {
+    in property <string> label <=> self.text;
+    color: Theme.text-muted;
+    font-size: 12px;
+    wrap: word-wrap;
+}
+
+export component FieldLabel inherits Text {
+    in property <string> label <=> self.text;
+    color: Theme.text;
+    font-size: 13px;
+    font-weight: 700;
+}

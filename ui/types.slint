@@ -1,0 +1,41 @@
+export struct TagQueryData {
+    id: int,
+    tags: string,
+    failed-count: int,
+    running: bool,
+}
+
+// phase-color-idx: 0=muted, 1=primary, 2=success, 3=warn, 4=danger
+export struct JobData {
+    id: int,
+    tags: string,
+    phase: int,
+    phase-label: string,
+    phase-color-idx: int,
+    stats-label: string,
+    progress: float,
+    current-file: string,
+    finished: bool,
+    paused: bool,
+}
+
+// level: 0=info, 1=warn, 2=error
+export struct LogEntry {
+    level: int,
+    text: string,
+}
+
+export struct SettingsData {
+    username: string,
+    api-key: string,
+    creds-dirty: bool,
+    creds-loaded: bool,
+    creds-checking: bool,
+    creds-error: string,
+    site: int,
+    download-dir: string,
+    rating-safe: bool,
+    rating-questionable: bool,
+    rating-explicit: bool,
+    blacklist: string,
+}

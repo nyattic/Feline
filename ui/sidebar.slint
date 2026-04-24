@@ -1,0 +1,74 @@
+import { Theme } from "theme.slint";
+import { NavItem } from "widgets.slint";
+
+export component Sidebar inherits Rectangle {
+    in property <int> active-tab;
+    in property <int> active-jobs;
+    callback tab-selected(int);
+
+    width: 220px;
+    background: Theme.surface;
+
+    VerticalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 20px;
+        padding-bottom: 20px;
+        spacing: 4px;
+
+        VerticalLayout {
+            padding-left: 8px;
+            padding-bottom: 24px;
+            Text {
+                text: "Feline";
+                color: Theme.primary;
+                font-size: 22px;
+                font-weight: 700;
+            }
+        }
+
+        NavItem {
+            label: "Queue";
+            selected: root.active-tab == 0;
+            clicked => { root.tab-selected(0); }
+        }
+        NavItem {
+            label: "Settings";
+            selected: root.active-tab == 1;
+            clicked => { root.tab-selected(1); }
+        }
+        NavItem {
+            label: "Log";
+            selected: root.active-tab == 2;
+            clicked => { root.tab-selected(2); }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        VerticalLayout {
+            padding-left: 8px;
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                Text {
+                    text: "●";
+                    color: root.active-jobs > 0 ? Theme.primary : Theme.text-muted;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.active-jobs > 0 ? "\{root.active-jobs} active" : "idle";
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                text: "Made with Slint";
+                color: Theme.text-muted;
+                font-size: 10px;
+            }
+        }
+    }
+}

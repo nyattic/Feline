@@ -1,0 +1,78 @@
+import { Theme } from "theme.slint";
+import { TagQueryData, JobData, LogEntry, SettingsData } from "types.slint";
+import { Sidebar } from "sidebar.slint";
+import { QueuePage } from "queue.slint";
+import { SettingsPage } from "settings.slint";
+import { LogPage } from "log.slint";
+
+export { TagQueryData, JobData, LogEntry, SettingsData }
+
+export component AppWindow inherits Window {
+    title: "Feline";
+    icon: @image-url("../assets/icon.png");
+    preferred-width: 1100px;
+    preferred-height: 720px;
+    min-width: 800px;
+    min-height: 500px;
+    background: Theme.bg;
+    default-font-family: "Pretendard Variable";
+
+    in-out property <int> active-tab: 0;
+    in property <int> active-jobs: 0;
+    in property <bool> logged-in: false;
+
+    in property <[TagQueryData]> queries;
+    in property <[JobData]> jobs;
+    in property <[LogEntry]> logs;
+    in-out property <SettingsData> settings;
+    in-out property <string> new-query-buf;
+
+    callback add-query(string);
+    callback remove-query(int);
+    callback start-job(string);
+    callback toggle-pause-job(int);
+
+    callback login;
+    callback logout;
+    callback pick-folder;
+    callback settings-changed;
+
+    callback clear-logs;
+
+    HorizontalLayout {
+        spacing: 0px;
+
+        Sidebar {
+            active-tab: root.active-tab;
+            active-jobs: root.active-jobs;
+            tab-selected(i) => { root.active-tab = i; }
+        }
+
+        if root.active-tab == 0 : QueuePage {
+            horizontal-stretch: 1;
+            queries: root.queries;
+            jobs: root.jobs;
+            logged-in: root.logged-in;
+            new-query-buf <=> root.new-query-buf;
+            add-query(tags) => { root.add-query(tags); }
+            remove-query(id) => { root.remove-query(id); }
+            start-job(tags) => { root.start-job(tags); }
+            toggle-pause-job(id) => { root.toggle-pause-job(id); }
+        }
+
+        if root.active-tab == 1 : SettingsPage {
+            horizontal-stretch: 1;
+            settings <=> root.settings;
+            login => { root.login(); }
+            logout => { root.logout(); }
+            pick-folder => { root.pick-folder(); }
+            settings-changed => { root.settings-changed(); }
+        }
+
+        if root.active-tab == 2 : LogPage {
+            horizontal-stretch: 1;
+            logs: root.logs;
+            clear-logs => { root.clear-logs(); }
+        }
+    }
+}

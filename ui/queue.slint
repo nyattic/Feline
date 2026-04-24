@@ -1,0 +1,234 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Card, PageTitle, TextLinkButton } from "widgets.slint";
+import { TagQueryData, JobData } from "types.slint";
+
+component JobRow {
+    in property <JobData> job;
+    callback toggle-pause;
+
+    VerticalLayout {
+        spacing: 6px;
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 6px;
+                horizontal-stretch: 0;
+                Text {
+                    text: "#\{root.job.id}";
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.job.phase-label;
+                    color: root.job.phase-color-idx == 0 ? Theme.text-muted
+                        : (root.job.phase-color-idx == 2 ? Theme.success
+                        : (root.job.phase-color-idx == 3 ? Theme.warn
+                        : (root.job.phase-color-idx == 4 ? Theme.danger
+                        : Theme.primary)));
+                    font-size: 12px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            Text {
+                text: root.job.stats-label;
+                color: Theme.text-muted;
+                font-size: 12px;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+            if !root.job.finished : TextLinkButton {
+                label: root.job.paused ? "Resume" : "Pause";
+                clicked => { root.toggle-pause(); }
+            }
+        }
+
+        Rectangle {
+            height: 8px;
+            border-radius: 4px;
+            background: Theme.surface-container-high;
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width * root.job.progress;
+                height: parent.height;
+                border-radius: 4px;
+                background: Theme.primary;
+            }
+        }
+
+        if root.job.current-file != "" : Text {
+            text: root.job.current-file;
+            color: Theme.text-muted;
+            font-size: 11px;
+            overflow: elide;
+        }
+    }
+}
+
+component QueryCard {
+    in property <TagQueryData> query;
+    in property <[JobData]> jobs;
+    in property <bool> logged-in;
+    callback download-all;
+    callback remove;
+    callback toggle-pause-job(int);
+
+    Card {
+        VerticalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 18px;
+            padding-bottom: 18px;
+            spacing: 0px;
+
+            Text {
+                text: root.query.tags;
+                color: Theme.text;
+                font-size: 16px;
+                font-weight: 700;
+                wrap: word-wrap;
+            }
+
+            if root.query.failed-count > 0 : VerticalLayout {
+                padding-top: 4px;
+                Text {
+                    text: "\{root.query.failed-count} permanently skipped";
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                }
+            }
+
+            Rectangle { height: 14px; }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+
+                TextLinkButton {
+                    label: "Remove";
+                    clicked => { root.remove(); }
+                }
+                Button {
+                    text: "Download";
+                    primary: true;
+                    enabled: !root.query.running && root.logged-in;
+                    clicked => { root.download-all(); }
+                }
+            }
+
+            for job in root.jobs : VerticalLayout {
+                spacing: 0px;
+                if job.tags == root.query.tags : VerticalLayout {
+                    spacing: 0px;
+                    Rectangle { height: 14px; }
+                    Rectangle { height: 1px; background: Theme.outline-variant; }
+                    Rectangle { height: 12px; }
+                    JobRow {
+                        job: job;
+                        toggle-pause => { root.toggle-pause-job(job.id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component QueuePage inherits VerticalLayout {
+    in property <[TagQueryData]> queries;
+    in property <[JobData]> jobs;
+    in property <bool> logged-in;
+    in-out property <string> new-query-buf;
+    callback add-query(string);
+    callback remove-query(int);
+    callback start-job(string);
+    callback toggle-pause-job(int);
+
+    padding-left: 32px;
+    padding-right: 32px;
+    padding-top: 32px;
+    padding-bottom: 32px;
+    spacing: 24px;
+
+    PageTitle {
+        title: "Queue";
+        subtitle: "Add tag searches, then download all or pull only new posts.";
+    }
+
+    Card {
+        vertical-stretch: 0;
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 14px;
+            padding-bottom: 14px;
+            spacing: 10px;
+            LineEdit {
+                placeholder-text: "tags (e.g. canine solo -young)";
+                text <=> root.new-query-buf;
+                accepted(s) => {
+                    if (s != "") {
+                        root.add-query(s);
+                        root.new-query-buf = "";
+                    }
+                }
+            }
+            Button {
+                text: "Add";
+                primary: true;
+                clicked => {
+                    if (root.new-query-buf != "") {
+                        root.add-query(root.new-query-buf);
+                        root.new-query-buf = "";
+                    }
+                }
+            }
+        }
+    }
+
+    if root.queries.length == 0 : Card {
+        vertical-stretch: 1;
+        VerticalLayout {
+            padding-top: 32px;
+            padding-bottom: 32px;
+            alignment: center;
+            spacing: 6px;
+            Text {
+                text: "No queries yet";
+                color: Theme.text;
+                font-size: 16px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Add a tag search above to get started.";
+                color: Theme.text-muted;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    if root.queries.length > 0 : ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: start;
+            spacing: 12px;
+            for q in root.queries : QueryCard {
+                query: q;
+                jobs: root.jobs;
+                logged-in: root.logged-in;
+                download-all => { root.start-job(q.tags); }
+                remove => { root.remove-query(q.id); }
+                toggle-pause-job(id) => { root.toggle-pause-job(id); }
+            }
+        }
+    }
+}

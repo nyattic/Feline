@@ -1,0 +1,51 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.Trash-*
+
+# IDE / Editor
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+.nvim/
+.zed/
+
+# Logs
+*.log
+logs/
+
+# Env / Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib

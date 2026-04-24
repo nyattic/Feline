@@ -1,0 +1,61 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Card, PageTitle, TextLinkButton } from "widgets.slint";
+import { LogEntry } from "types.slint";
+
+export component LogPage inherits VerticalLayout {
+    in property <[LogEntry]> logs;
+    callback clear-logs;
+
+    padding-left: 32px;
+    padding-right: 32px;
+    padding-top: 32px;
+    padding-bottom: 32px;
+    spacing: 20px;
+
+    HorizontalLayout {
+        alignment: space-between;
+        PageTitle { title: "Log"; subtitle: ""; }
+        TextLinkButton {
+            label: "Clear";
+            clicked => { root.clear-logs(); }
+        }
+    }
+
+    Card {
+        vertical-stretch: 1;
+        VerticalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 14px;
+            padding-bottom: 14px;
+
+            if root.logs.length == 0 : VerticalLayout {
+                alignment: center;
+                padding-top: 24px;
+                padding-bottom: 24px;
+                Text {
+                    text: "No log output yet.";
+                    color: Theme.text-muted;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                }
+            }
+
+            if root.logs.length > 0 : ScrollView {
+                VerticalLayout {
+                    alignment: start;
+                    spacing: 2px;
+                    for entry in root.logs : Text {
+                        text: entry.text;
+                        color: entry.level == 0
+                            ? Theme.text
+                            : (entry.level == 1 ? Theme.warn : Theme.danger);
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}
