@@ -66,20 +66,22 @@ export component SettingsPage inherits VerticalLayout {
                             }
                         }
 
+                        if root.settings.creds-error != "" || root.settings.creds-loaded : Text {
+                            text: root.settings.creds-error != ""
+                                ? "Login failed: \{root.settings.creds-error}"
+                                : "Logged in";
+                            color: root.settings.creds-error != ""
+                                ? Theme.danger
+                                : Theme.success;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+
                         HorizontalLayout {
                             spacing: 8px;
                             alignment: end;
-
                             Text {
                                 horizontal-stretch: 1;
-                                vertical-alignment: center;
-                                font-size: 12px;
-                                text: root.settings.creds-error != ""
-                                    ? "⚠  \{root.settings.creds-error}"
-                                    : (root.settings.creds-loaded ? "● logged in" : "");
-                                color: root.settings.creds-error != ""
-                                    ? Theme.danger
-                                    : Theme.success;
                             }
 
                             if root.settings.creds-loaded : TextLinkButton {
