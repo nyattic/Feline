@@ -7,32 +7,38 @@ component JobRow {
     in property <JobData> job;
     callback toggle-pause;
 
+    // 0..=2 = Starting/Discovering/Downloading; animate dots only while active.
+    property <bool> animate-label: root.job.phase <= 2;
+    property <int> tick: 0;
+    property <string> dots: root.animate-label
+        ? (root.tick == 1 ? "." : root.tick == 2 ? ".." : root.tick == 3 ? "..." : "")
+        : "";
+
+    Timer {
+        interval: 400ms;
+        running: root.animate-label;
+        triggered() => {
+            root.tick = mod(root.tick + 1, 4);
+        }
+    }
+
     VerticalLayout {
         spacing: 6px;
 
         HorizontalLayout {
             spacing: 8px;
 
-            HorizontalLayout {
-                spacing: 6px;
+            Text {
+                text: root.job.phase-label + root.dots;
+                color: root.job.phase-color-idx == 0 ? Theme.text-muted
+                    : (root.job.phase-color-idx == 2 ? Theme.success
+                    : (root.job.phase-color-idx == 3 ? Theme.warn
+                    : (root.job.phase-color-idx == 4 ? Theme.danger
+                    : Theme.primary)));
+                font-size: 12px;
+                font-weight: 700;
+                vertical-alignment: center;
                 horizontal-stretch: 0;
-                Text {
-                    text: "#\{root.job.id}";
-                    color: Theme.text-muted;
-                    font-size: 12px;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: root.job.phase-label;
-                    color: root.job.phase-color-idx == 0 ? Theme.text-muted
-                        : (root.job.phase-color-idx == 2 ? Theme.success
-                        : (root.job.phase-color-idx == 3 ? Theme.warn
-                        : (root.job.phase-color-idx == 4 ? Theme.danger
-                        : Theme.primary)));
-                    font-size: 12px;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                }
             }
 
             Rectangle { horizontal-stretch: 1; }
@@ -79,22 +85,51 @@ component QueryCard {
     in property <bool> logged-in;
     callback download-all;
     callback remove;
+    callback cancel;
     callback toggle-pause-job(int);
 
     Card {
         VerticalLayout {
             padding-left: 20px;
             padding-right: 20px;
-            padding-top: 18px;
-            padding-bottom: 18px;
+            padding-top: 14px;
+            padding-bottom: 14px;
             spacing: 0px;
 
-            Text {
-                text: root.query.tags;
-                color: Theme.text;
-                font-size: 16px;
-                font-weight: 700;
-                wrap: word-wrap;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.query.tags;
+                    color: Theme.text;
+                    font-size: 16px;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                if root.query.running || root.query.queued : TextLinkButton {
+                    label: "Cancel";
+                    clicked => { root.cancel(); }
+                }
+                if !root.query.running && !root.query.queued : TextLinkButton {
+                    label: "Remove";
+                    clicked => { root.remove(); }
+                }
+                Button {
+                    text: "Download";
+                    primary: true;
+                    enabled: !root.query.running && !root.query.queued && root.logged-in;
+                    clicked => { root.download-all(); }
+                }
+            }
+
+            if root.query.queued : VerticalLayout {
+                padding-top: 4px;
+                Text {
+                    text: "queued — waiting for the active job";
+                    color: Theme.warn;
+                    font-size: 12px;
+                }
             }
 
             if root.query.failed-count > 0 : VerticalLayout {
@@ -106,31 +141,13 @@ component QueryCard {
                 }
             }
 
-            Rectangle { height: 14px; }
-
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: end;
-
-                TextLinkButton {
-                    label: "Remove";
-                    clicked => { root.remove(); }
-                }
-                Button {
-                    text: "Download";
-                    primary: true;
-                    enabled: !root.query.running && root.logged-in;
-                    clicked => { root.download-all(); }
-                }
-            }
-
             for job in root.jobs : VerticalLayout {
                 spacing: 0px;
                 if job.tags == root.query.tags : VerticalLayout {
                     spacing: 0px;
-                    Rectangle { height: 14px; }
+                    Rectangle { height: 10px; }
                     Rectangle { height: 1px; background: Theme.outline-variant; }
-                    Rectangle { height: 12px; }
+                    Rectangle { height: 10px; }
                     JobRow {
                         job: job;
                         toggle-pause => { root.toggle-pause-job(job.id); }
@@ -146,8 +163,8 @@ export component QueuePage inherits VerticalLayout {
     in property <[JobData]> jobs;
     in property <bool> logged-in;
     in-out property <string> new-query-buf;
-    callback add-query(string);
     callback remove-query(int);
+    callback cancel-query(int);
     callback start-job(string);
     callback toggle-pause-job(int);
 
@@ -159,7 +176,7 @@ export component QueuePage inherits VerticalLayout {
 
     PageTitle {
         title: "Queue";
-        subtitle: "Add tag searches, then download all or pull only new posts.";
+        subtitle: "Type a tag search and download — saved queries can be re-run for new posts only.";
     }
 
     Card {
@@ -174,20 +191,19 @@ export component QueuePage inherits VerticalLayout {
                 placeholder-text: "tags (e.g. canine solo -young)";
                 text <=> root.new-query-buf;
                 accepted(s) => {
-                    if (s != "") {
-                        root.add-query(s);
+                    if (s != "" && root.logged-in) {
+                        root.start-job(s);
                         root.new-query-buf = "";
                     }
                 }
             }
             Button {
-                text: "Add";
+                text: "Download";
                 primary: true;
+                enabled: root.logged-in && root.new-query-buf != "";
                 clicked => {
-                    if (root.new-query-buf != "") {
-                        root.add-query(root.new-query-buf);
-                        root.new-query-buf = "";
-                    }
+                    root.start-job(root.new-query-buf);
+                    root.new-query-buf = "";
                 }
             }
         }
@@ -227,6 +243,7 @@ export component QueuePage inherits VerticalLayout {
                 logged-in: root.logged-in;
                 download-all => { root.start-job(q.tags); }
                 remove => { root.remove-query(q.id); }
+                cancel => { root.cancel-query(q.id); }
                 toggle-pause-job(id) => { root.toggle-pause-job(id); }
             }
         }

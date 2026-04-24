@@ -12,6 +12,7 @@ use super::worker::{DownloadError, download_post};
 use crate::config::Config;
 use crate::credentials::Credentials;
 use crate::e621::Client;
+use crate::e621::Post;
 use crate::e621::rate_limit::{ApiLimiter, new_api_limiter};
 use crate::state::StateStore;
 
@@ -39,7 +40,6 @@ pub enum DownloadEvent {
         job_id: u64,
         done: usize,
         failed: usize,
-        total: usize,
         current: Option<String>,
         bytes_per_sec: u64,
     },
@@ -307,7 +307,6 @@ fn handle_download_outcome(
                 job_id,
                 done: progress.done,
                 failed: progress.failed,
-                total: progress.discovered_total,
                 current: fname,
                 bytes_per_sec: bps,
             });
@@ -329,7 +328,6 @@ fn handle_download_outcome(
                 job_id,
                 done: progress.done,
                 failed: progress.failed,
-                total: progress.discovered_total,
                 current: None,
                 bytes_per_sec: bps,
             });
@@ -406,121 +404,38 @@ async fn run_job(
     .unwrap_or_else(|_| Md5Index::empty());
 
     let existing_failed = state.get(&tags).failed.clone();
-
     let http = client.http().clone();
     let start = Instant::now();
-    let mut skipped_existing: usize = 0;
-    let mut skipped_failed: usize = 0;
-    let mut before_id: Option<u64> = None;
-    let mut pages_scanned: u32 = 0;
-    let mut progress = ProgressState {
-        done: 0,
-        failed: 0,
-        discovered_total: 0,
-        bytes_in_window: 0,
-        window_start: Instant::now(),
+
+    // Phase 1 — discover every page before any download starts. Until this
+    // returns, the UI shows pages-scanned/queued and the bar stays empty,
+    // because we don't know the final total yet.
+    let discovery = match discover_posts(
+        job_id,
+        &tags,
+        &cfg,
+        &client,
+        &state,
+        &existing_failed,
+        &md5_index,
+        &control,
+        &events,
+    )
+    .await?
+    {
+        Some(r) => r,
+        None => return Ok(()), // cancelled mid-discovery
     };
 
-    let mut futs: FuturesUnordered<BoxFuture<'static, DownloadOutcome>> = FuturesUnordered::new();
-
-    loop {
-        if wait_while_paused(job_id, &control, &events).await {
-            let _ = events.send(DownloadEvent::JobCancelled { job_id });
-            return Ok(());
-        }
-
-        let page = client
-            .search_page(&tags, &cfg.blacklist, cfg.rating, before_id)
-            .await?;
-
-        pages_scanned += 1;
-        if page.is_empty() {
-            break;
-        }
-
-        let mut lowest_id_on_page = u64::MAX;
-        for post in page {
-            if wait_while_paused(job_id, &control, &events).await {
-                let _ = events.send(DownloadEvent::JobCancelled { job_id });
-                return Ok(());
-            }
-
-            if post.id < lowest_id_on_page {
-                lowest_id_on_page = post.id;
-            }
-            if existing_failed.contains(&post.id) {
-                skipped_failed += 1;
-                continue;
-            }
-            if md5_index.contains(&post.file.md5) {
-                skipped_existing += 1;
-                continue;
-            }
-            if post.file.url.is_none() {
-                skipped_failed += 1;
-                mark_post_permanently_failed(&state, &tags, post.id);
-                let _ = events.send(DownloadEvent::PostFailed {
-                    job_id,
-                    post_id: post.id,
-                    error: "post has no file url (deleted or restricted)".into(),
-                });
-                continue;
-            }
-
-            while futs.len() >= CONCURRENT_DOWNLOADS {
-                match next_download_or_control(job_id, &mut futs, &control, &events).await {
-                    NextDownload::Completed(outcome) => handle_download_outcome(
-                        outcome,
-                        job_id,
-                        &tags,
-                        &state,
-                        &md5_index,
-                        &events,
-                        &mut progress,
-                    ),
-                    NextDownload::Exhausted => break,
-                    NextDownload::Cancelled => {
-                        let _ = state.save();
-                        let _ = events.send(DownloadEvent::JobCancelled { job_id });
-                        return Ok(());
-                    }
-                }
-            }
-
-            progress.discovered_total += 1;
-            let http = http.clone();
-            let root = download_root.clone();
-            let tags = tags.clone();
-            let control = control.clone();
-            futs.push(Box::pin(async move {
-                let id = post.id;
-                let md5 = post.file.md5.clone();
-                let size = post.file.size;
-                let res = download_post(&http, &post, &root, &tags, control).await;
-                (id, md5, size, res)
-            }));
-        }
-
-        let _ = events.send(DownloadEvent::Discovering {
-            job_id,
-            pages_scanned,
-            posts_queued: progress.discovered_total,
-        });
-
-        if lowest_id_on_page == u64::MAX {
-            break;
-        }
-        before_id = Some(lowest_id_on_page);
-    }
-
+    let total = discovery.to_download.len();
     let _ = events.send(DownloadEvent::DiscoveryDone {
         job_id,
-        total_posts: progress.discovered_total,
-        skipped_existing,
-        skipped_failed,
+        total_posts: total,
+        skipped_existing: discovery.skipped_existing,
+        skipped_failed: discovery.skipped_failed,
     });
 
-    if progress.discovered_total == 0 {
+    if total == 0 {
         let _ = events.send(DownloadEvent::JobFinished {
             job_id,
             done: 0,
@@ -531,29 +446,49 @@ async fn run_job(
         return Ok(());
     }
 
+    // Phase 2 — drain the discovered list with bounded concurrency.
+    let mut progress = ProgressState {
+        done: 0,
+        failed: 0,
+        discovered_total: total,
+        bytes_in_window: 0,
+        window_start: Instant::now(),
+    };
+    let mut futs: FuturesUnordered<BoxFuture<'static, DownloadOutcome>> = FuturesUnordered::new();
+    let mut pending = discovery.to_download.into_iter();
+
+    while futs.len() < CONCURRENT_DOWNLOADS {
+        let Some(post) = pending.next() else { break };
+        futs.push(spawn_download(post, &http, &download_root, &tags, &control));
+    }
+
     while !futs.is_empty() {
+        if wait_while_paused(job_id, &control, &events).await {
+            let _ = state.save();
+            let _ = events.send(DownloadEvent::JobCancelled { job_id });
+            return Ok(());
+        }
         match next_download_or_control(job_id, &mut futs, &control, &events).await {
-            NextDownload::Completed(outcome) => handle_download_outcome(
-                outcome,
-                job_id,
-                &tags,
-                &state,
-                &md5_index,
-                &events,
-                &mut progress,
-            ),
+            NextDownload::Completed(outcome) => {
+                handle_download_outcome(
+                    outcome,
+                    job_id,
+                    &tags,
+                    &state,
+                    &md5_index,
+                    &events,
+                    &mut progress,
+                );
+                if let Some(post) = pending.next() {
+                    futs.push(spawn_download(post, &http, &download_root, &tags, &control));
+                }
+            }
             NextDownload::Exhausted => break,
             NextDownload::Cancelled => {
                 let _ = state.save();
                 let _ = events.send(DownloadEvent::JobCancelled { job_id });
                 return Ok(());
             }
-        }
-
-        if wait_while_paused(job_id, &control, &events).await {
-            let _ = state.save();
-            let _ = events.send(DownloadEvent::JobCancelled { job_id });
-            return Ok(());
         }
     }
 
@@ -573,6 +508,110 @@ async fn run_job(
         duration_ms,
     });
     Ok(())
+}
+
+struct DiscoveryResult {
+    to_download: Vec<Post>,
+    skipped_existing: usize,
+    skipped_failed: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn discover_posts(
+    job_id: u64,
+    tags: &str,
+    cfg: &Config,
+    client: &Client,
+    state: &StateStore,
+    existing_failed: &std::collections::HashSet<u64>,
+    md5_index: &Md5Index,
+    control: &JobControl,
+    events: &mpsc::UnboundedSender<DownloadEvent>,
+) -> anyhow::Result<Option<DiscoveryResult>> {
+    let mut to_download: Vec<Post> = Vec::new();
+    let mut skipped_existing: usize = 0;
+    let mut skipped_failed: usize = 0;
+    let mut before_id: Option<u64> = None;
+    let mut pages_scanned: u32 = 0;
+
+    loop {
+        if wait_while_paused(job_id, control, events).await {
+            let _ = events.send(DownloadEvent::JobCancelled { job_id });
+            return Ok(None);
+        }
+
+        let page = client
+            .search_page(tags, &cfg.blacklist, cfg.rating, before_id)
+            .await?;
+
+        pages_scanned += 1;
+        if page.is_empty() {
+            break;
+        }
+
+        let mut lowest_id_on_page = u64::MAX;
+        for post in page {
+            if post.id < lowest_id_on_page {
+                lowest_id_on_page = post.id;
+            }
+            if existing_failed.contains(&post.id) {
+                skipped_failed += 1;
+                continue;
+            }
+            if md5_index.contains(&post.file.md5) {
+                skipped_existing += 1;
+                continue;
+            }
+            if post.file.url.is_none() {
+                skipped_failed += 1;
+                mark_post_permanently_failed(state, tags, post.id);
+                let _ = events.send(DownloadEvent::PostFailed {
+                    job_id,
+                    post_id: post.id,
+                    error: "post has no file url (deleted or restricted)".into(),
+                });
+                continue;
+            }
+            to_download.push(post);
+        }
+
+        let _ = events.send(DownloadEvent::Discovering {
+            job_id,
+            pages_scanned,
+            posts_queued: to_download.len(),
+        });
+
+        if lowest_id_on_page == u64::MAX {
+            break;
+        }
+        before_id = Some(lowest_id_on_page);
+    }
+
+    Ok(Some(DiscoveryResult {
+        to_download,
+        skipped_existing,
+        skipped_failed,
+    }))
+}
+
+fn spawn_download(
+    post: Post,
+    http: &reqwest::Client,
+    download_root: &std::path::Path,
+    tags: &str,
+    control: &Arc<JobControl>,
+) -> BoxFuture<'static, DownloadOutcome> {
+    let http = http.clone();
+    let root = download_root.to_path_buf();
+    let tags = tags.to_string();
+    let control = control.clone();
+    Box::pin(async move {
+        let id = post.id;
+        let md5 = post.file.md5.clone();
+        let size = post.file.size;
+        let res = download_post(&http, &post, &root, &tags, control).await;
+        (id, md5, size, res)
+    })
 }
 
 fn compute_bps(window_start: &mut Instant, bytes_in_window: &mut u64) -> u64 {

@@ -30,6 +30,9 @@ pub struct Controller {
     pub manager: Arc<DownloadManager>,
 
     pub jobs: HashMap<u64, JobState>,
+    /// Tag queries waiting their turn. Drained in FIFO order whenever the
+    /// currently active job reaches a terminal state.
+    pub pending_tags: VecDeque<String>,
     pub log_lines: VecDeque<LogLine>,
 }
 
@@ -98,6 +101,7 @@ impl Controller {
             state_store,
             manager: Arc::new(manager),
             jobs: HashMap::new(),
+            pending_tags: VecDeque::new(),
             log_lines: VecDeque::with_capacity(LOG_LINE_CAP),
         };
         (ctrl, events_rx)
@@ -152,13 +156,38 @@ impl Controller {
             self.push_log(LogLevel::Warn, "login required before downloading");
             return;
         }
-        if self.jobs.values().any(|j| !j.finished && j.tags == tags) {
-            self.push_log(
-                LogLevel::Warn,
-                format!("job already running for query: {tags}"),
-            );
+        let tags = tags.trim().to_string();
+        if tags.is_empty() {
             return;
         }
+
+        // Persist as a saved query if not already in the list.
+        if !self.cfg.queries.iter().any(|q| q.tags == tags) {
+            self.cfg.new_query(tags.clone());
+            self.cfg_dirty = true;
+            self.save_config_if_dirty();
+        }
+
+        let already_running = self.jobs.values().any(|j| !j.finished && j.tags == tags);
+        let already_pending = self.pending_tags.iter().any(|t| t == &tags);
+        if already_running || already_pending {
+            self.push_log(LogLevel::Warn, format!("already running/queued: {tags}"));
+            return;
+        }
+
+        // Serialize: shared 2 RPS API limiter makes parallel jobs pointless,
+        // so wait for the currently active job before spawning the next one.
+        let any_active = self.jobs.values().any(|j| !j.finished);
+        if any_active {
+            self.pending_tags.push_back(tags.clone());
+            self.push_log(LogLevel::Info, format!("queued: {tags}"));
+            return;
+        }
+
+        self.spawn_now(tags);
+    }
+
+    fn spawn_now(&mut self, tags: String) {
         let cfg = self.cfg.clone();
         let creds = Some(self.creds.clone());
         match self.manager.spawn_job(tags.clone(), cfg, creds) {
@@ -182,6 +211,16 @@ impl Controller {
                 );
             }
             Err(e) => self.push_log(LogLevel::Error, format!("spawn job: {e}")),
+        }
+    }
+
+    fn drain_pending(&mut self) {
+        while let Some(next) = self.pending_tags.pop_front() {
+            if self.jobs.values().any(|j| !j.finished && j.tags == next) {
+                continue;
+            }
+            self.spawn_now(next);
+            break;
         }
     }
 
@@ -225,14 +264,12 @@ impl Controller {
                 job_id,
                 done,
                 failed,
-                total,
                 current,
                 bytes_per_sec,
             } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
                     j.done = done;
                     j.failed = failed;
-                    j.total = total;
                     j.current_file = current;
                     j.bytes_per_sec = bytes_per_sec;
                 }
@@ -270,6 +307,7 @@ impl Controller {
                         duration_ms as f64 / 1000.0
                     ),
                 );
+                self.drain_pending();
             }
             DownloadEvent::JobCancelled { job_id } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
@@ -279,6 +317,7 @@ impl Controller {
                     j.handle = None;
                 }
                 self.push_log(LogLevel::Warn, format!("[{job_id}] cancelled"));
+                self.drain_pending();
             }
             DownloadEvent::JobPaused { job_id } => {
                 if let Some(j) = self.jobs.get_mut(&job_id)
@@ -304,6 +343,7 @@ impl Controller {
                     j.handle = None;
                 }
                 self.push_log(LogLevel::Error, format!("[{job_id}] error: {error}"));
+                self.drain_pending();
             }
         }
     }
@@ -370,6 +410,7 @@ fn to_tag_query_data(q: &crate::config::TagQuery, ctrl: &Controller) -> TagQuery
         tags: q.tags.clone().into(),
         failed_count: st.failed.len() as i32,
         running: ctrl.jobs.values().any(|j| !j.finished && j.tags == q.tags),
+        queued: ctrl.pending_tags.iter().any(|t| t == &q.tags),
     }
 }
 
@@ -383,12 +424,13 @@ fn to_job_data(id: u64, j: &JobState) -> JobData {
         JobPhase::Cancelled => ("cancelled", 3),
         JobPhase::Errored => ("error", 4),
     };
-    let progress = if j.total > 0 {
-        (j.done as f32 / j.total as f32).clamp(0.0, 1.0)
-    } else if matches!(j.phase, JobPhase::Starting | JobPhase::Discovering) {
-        0.0
-    } else {
-        1.0
+    let progress = match j.phase {
+        JobPhase::Starting | JobPhase::Discovering => 0.0,
+        JobPhase::Downloading | JobPhase::Paused if j.total > 0 => {
+            (j.done as f32 / j.total as f32).clamp(0.0, 1.0)
+        }
+        JobPhase::Downloading | JobPhase::Paused => 0.0,
+        JobPhase::Finished | JobPhase::Cancelled | JobPhase::Errored => 1.0,
     };
     JobData {
         id: id as i32,
@@ -419,15 +461,25 @@ fn phase_to_int(p: JobPhase) -> i32 {
 fn format_stats(j: &JobState) -> String {
     let speed = format_bps(j.bytes_per_sec);
     match j.phase {
-        JobPhase::Discovering => format!("{} pages · {} queued", j.pages_scanned, j.total),
+        JobPhase::Starting | JobPhase::Discovering => {
+            format!("{} pages · {} queued", j.pages_scanned, j.total)
+        }
         JobPhase::Downloading => {
             format!("{}/{} · {} failed · {}", j.done, j.total, j.failed, speed)
         }
-        JobPhase::Paused => format!("{}/{} · {} failed · paused", j.done, j.total, j.failed),
+        JobPhase::Paused => {
+            let was = j.phase_before_pause.unwrap_or(JobPhase::Downloading);
+            match was {
+                JobPhase::Starting | JobPhase::Discovering => {
+                    format!("{} pages · {} queued · paused", j.pages_scanned, j.total)
+                }
+                _ => format!("{}/{} · {} failed · paused", j.done, j.total, j.failed),
+            }
+        }
         JobPhase::Finished | JobPhase::Cancelled => {
             format!("{}/{} · {} failed", j.done, j.total, j.failed)
         }
-        _ => String::new(),
+        JobPhase::Errored => String::new(),
     }
 }
 
@@ -526,25 +578,6 @@ pub fn bind(
         push_all(&c, ui);
     }
 
-    // add-query
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        ui.on_add_query(move |tags| {
-            if let Some(ui) = ui_weak.upgrade() {
-                let tags = tags.to_string().trim().to_string();
-                if tags.is_empty() {
-                    return;
-                }
-                let mut c = ctrl.lock();
-                c.cfg.new_query(tags);
-                c.cfg_dirty = true;
-                c.save_config_if_dirty();
-                push_queries(&c, &ui);
-            }
-        });
-    }
-
     // remove-query
     {
         let ui_weak = ui.as_weak();
@@ -552,10 +585,59 @@ pub fn bind(
         ui.on_remove_query(move |id| {
             if let Some(ui) = ui_weak.upgrade() {
                 let mut c = ctrl.lock();
+                let removed_tags: Option<String> = c
+                    .cfg
+                    .queries
+                    .iter()
+                    .find(|q| q.id == id as u64)
+                    .map(|q| q.tags.clone());
                 c.cfg.remove_query(id as u64);
                 c.cfg_dirty = true;
                 c.save_config_if_dirty();
+                if let Some(tags) = removed_tags {
+                    c.pending_tags.retain(|t| t != &tags);
+                }
                 push_queries(&c, &ui);
+            }
+        });
+    }
+
+    // cancel-query — abort whichever stage of this query is active.
+    {
+        let ui_weak = ui.as_weak();
+        let ctrl = controller.clone();
+        ui.on_cancel_query(move |id| {
+            if let Some(ui) = ui_weak.upgrade() {
+                let mut c = ctrl.lock();
+                let Some(tags) = c
+                    .cfg
+                    .queries
+                    .iter()
+                    .find(|q| q.id == id as u64)
+                    .map(|q| q.tags.clone())
+                else {
+                    return;
+                };
+                let was_pending = c.pending_tags.iter().any(|t| t == &tags);
+                c.pending_tags.retain(|t| t != &tags);
+                let active = c
+                    .jobs
+                    .values()
+                    .find(|j| !j.finished && j.tags == tags)
+                    .and_then(|j| j.handle.as_ref().map(|h| (j.tags.clone(), h.job_id)));
+                if let Some((_, job_id)) = active {
+                    if let Some(j) = c.jobs.get(&job_id)
+                        && let Some(h) = j.handle.as_ref()
+                    {
+                        h.cancel();
+                    }
+                    c.push_log(LogLevel::Info, format!("cancel requested: {tags}"));
+                } else if was_pending {
+                    c.push_log(LogLevel::Info, format!("removed from queue: {tags}"));
+                }
+                push_queries(&c, &ui);
+                push_jobs(&c, &ui);
+                push_logs(&c, &ui);
             }
         });
     }

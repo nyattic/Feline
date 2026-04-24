@@ -27,8 +27,8 @@ export component AppWindow inherits Window {
     in-out property <SettingsData> settings;
     in-out property <string> new-query-buf;
 
-    callback add-query(string);
     callback remove-query(int);
+    callback cancel-query(int);
     callback start-job(string);
     callback toggle-pause-job(int);
 
@@ -54,8 +54,8 @@ export component AppWindow inherits Window {
             jobs: root.jobs;
             logged-in: root.logged-in;
             new-query-buf <=> root.new-query-buf;
-            add-query(tags) => { root.add-query(tags); }
             remove-query(id) => { root.remove-query(id); }
+            cancel-query(id) => { root.cancel-query(id); }
             start-job(tags) => { root.start-job(tags); }
             toggle-pause-job(id) => { root.toggle-pause-job(id); }
         }
