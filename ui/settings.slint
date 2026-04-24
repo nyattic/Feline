@@ -80,9 +80,7 @@ export component SettingsPage inherits VerticalLayout {
                         HorizontalLayout {
                             spacing: 8px;
                             alignment: end;
-                            Text {
-                                horizontal-stretch: 1;
-                            }
+                            Rectangle { horizontal-stretch: 1; }
 
                             if root.settings.creds-loaded : TextLinkButton {
                                 label: "Log out";

@@ -70,7 +70,7 @@ with `page=b<ID>`.
 
 Requirements:
 
-- Rust 1.95 or newer
+- Rust 1.95
 - A native C toolchain
 
 ```bash
