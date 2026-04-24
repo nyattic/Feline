@@ -44,7 +44,6 @@ pub enum DownloadEvent {
         bytes_per_sec: u64,
     },
     PostFailed {
-        job_id: u64,
         post_id: u64,
         error: String,
     },
@@ -316,7 +315,6 @@ fn handle_download_outcome(
             progress.failed += 1;
             let err_str = format!("{err}");
             let _ = events.send(DownloadEvent::PostFailed {
-                job_id,
                 post_id,
                 error: err_str.clone(),
             });
@@ -566,7 +564,6 @@ async fn discover_posts(
                 skipped_failed += 1;
                 mark_post_permanently_failed(state, tags, post.id);
                 let _ = events.send(DownloadEvent::PostFailed {
-                    job_id,
                     post_id: post.id,
                     error: "post has no file url (deleted or restricted)".into(),
                 });

@@ -230,7 +230,7 @@ impl Controller {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
                     j.phase = JobPhase::Starting;
                 }
-                self.push_log(LogLevel::Info, format!("[{job_id}] started: {tags}"));
+                self.push_log(LogLevel::Info, format!("started: {tags}"));
             }
             DownloadEvent::Discovering {
                 job_id,
@@ -256,7 +256,7 @@ impl Controller {
                 self.push_log(
                     LogLevel::Info,
                     format!(
-                        "[{job_id}] discovery done: {total_posts} to download, {skipped_existing} existing, {skipped_failed} previously failed/unavailable"
+                        "discovery done: {total_posts} to download, {skipped_existing} existing, {skipped_failed} previously failed/unavailable"
                     ),
                 );
             }
@@ -274,14 +274,10 @@ impl Controller {
                     j.bytes_per_sec = bytes_per_sec;
                 }
             }
-            DownloadEvent::PostFailed {
-                job_id,
-                post_id,
-                error,
-            } => {
+            DownloadEvent::PostFailed { post_id, error } => {
                 self.push_log(
                     LogLevel::Warn,
-                    format!("[{job_id}] post {post_id} failed: {error}"),
+                    format!("post {post_id} failed: {error}"),
                 );
             }
             DownloadEvent::JobFinished {
@@ -303,7 +299,7 @@ impl Controller {
                 self.push_log(
                     LogLevel::Info,
                     format!(
-                        "[{job_id}] finished: {done}/{total} ok, {failed} failed, {:.1}s",
+                        "finished: {done}/{total} ok, {failed} failed, {:.1}s",
                         duration_ms as f64 / 1000.0
                     ),
                 );
@@ -316,7 +312,7 @@ impl Controller {
                     j.finished = true;
                     j.handle = None;
                 }
-                self.push_log(LogLevel::Warn, format!("[{job_id}] cancelled"));
+                self.push_log(LogLevel::Warn, "cancelled".to_string());
                 self.drain_pending();
             }
             DownloadEvent::JobPaused { job_id } => {
@@ -326,7 +322,7 @@ impl Controller {
                     j.phase_before_pause = Some(j.phase);
                     j.phase = JobPhase::Paused;
                 }
-                self.push_log(LogLevel::Info, format!("[{job_id}] paused"));
+                self.push_log(LogLevel::Info, "paused".to_string());
             }
             DownloadEvent::JobResumed { job_id } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
@@ -334,7 +330,7 @@ impl Controller {
                     j.current_file = None;
                     j.bytes_per_sec = 0;
                 }
-                self.push_log(LogLevel::Info, format!("[{job_id}] resumed"));
+                self.push_log(LogLevel::Info, "resumed".to_string());
             }
             DownloadEvent::JobError { job_id, error } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
@@ -342,7 +338,7 @@ impl Controller {
                     j.finished = true;
                     j.handle = None;
                 }
-                self.push_log(LogLevel::Error, format!("[{job_id}] error: {error}"));
+                self.push_log(LogLevel::Error, format!("error: {error}"));
                 self.drain_pending();
             }
         }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 — 2026-04-24
+
+### Changed
+- Log lines no longer carry the internal `[job_id]` prefix; serialized jobs make it redundant
+
 ## 0.3.1 — 2026-04-24
 
 ### Fixed
