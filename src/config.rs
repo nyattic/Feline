@@ -30,6 +30,34 @@ pub struct RatingFilter {
     pub explicit: bool,
 }
 
+/// Optional `-type:...` filters injected into every search.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct MediaSkip {
+    #[serde(default)]
+    pub video: bool,
+    #[serde(default)]
+    pub flash: bool,
+    #[serde(default)]
+    pub animation: bool,
+}
+
+impl MediaSkip {
+    /// Returns the negated `-type:` tokens for the enabled skip flags.
+    pub fn as_query_tokens(&self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if self.video {
+            out.push("-type:webm");
+        }
+        if self.flash {
+            out.push("-type:swf");
+        }
+        if self.animation {
+            out.push("-type:gif");
+        }
+        out
+    }
+}
+
 impl RatingFilter {
     pub fn all() -> Self {
         Self {
@@ -77,6 +105,8 @@ pub struct Config {
     pub download_dir: PathBuf,
     pub blacklist: Vec<String>,
     pub rating: RatingFilter,
+    #[serde(default)]
+    pub media_skip: MediaSkip,
     pub queries: Vec<TagQuery>,
     #[serde(default)]
     pub next_query_id: u64,
@@ -89,6 +119,7 @@ impl Default for Config {
             download_dir: exe_dir().join("downloads"),
             blacklist: Vec::new(),
             rating: RatingFilter::all(),
+            media_skip: MediaSkip::default(),
             queries: Vec::new(),
             next_query_id: 1,
         }

@@ -1,12 +1,12 @@
 [package]
 name = "feline"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.95.0"
 license = "MIT"
 
 [dependencies]
-slint = "1"
+slint = "1.16.1"
 
 tokio = { version = "1.52.1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 tokio-util = { version = "0.7.18", features = ["io"] }
@@ -39,12 +39,12 @@ tracing-appender = "0.2.5"
 time = { version = "0.3.47", features = ["serde", "formatting", "macros"] }
 
 [build-dependencies]
-slint-build = "1"
+slint-build = "1.16.1"
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
-ico = "0.4"
+ico = "0.5.0"
 
 [profile.release]
 lto = "thin"

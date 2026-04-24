@@ -1,6 +1,6 @@
-import { Button, LineEdit, ComboBox, TextEdit, ScrollView } from "std-widgets.slint";
+import { Button, LineEdit, ComboBox, TextEdit, ScrollView, Switch } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { Card, PageTitle, SectionTitle, Caption, FieldLabel, FilterChip, TextLinkButton } from "widgets.slint";
+import { Card, PageTitle, SectionTitle, Caption, FieldLabel, TextLinkButton } from "widgets.slint";
 import { SettingsData } from "types.slint";
 
 export component SettingsPage inherits VerticalLayout {
@@ -158,32 +158,73 @@ export component SettingsPage inherits VerticalLayout {
                         spacing: 12px;
 
                         SectionTitle { title: "Rating filter"; }
-                        Caption { label: "If all or none are selected, no rating filter is applied."; }
+                        Caption { label: "If all or none are enabled, no rating filter is applied."; }
 
-                        HorizontalLayout {
+                        VerticalLayout {
                             spacing: 8px;
-                            alignment: start;
-                            FilterChip {
-                                label: "safe";
-                                selected: root.settings.rating-safe;
+                            Switch {
+                                text: "Safe";
+                                checked: root.settings.rating-safe;
                                 toggled => {
-                                    root.settings.rating-safe = self.selected;
+                                    root.settings.rating-safe = self.checked;
                                     root.settings-changed();
                                 }
                             }
-                            FilterChip {
-                                label: "questionable";
-                                selected: root.settings.rating-questionable;
+                            Switch {
+                                text: "Questionable";
+                                checked: root.settings.rating-questionable;
                                 toggled => {
-                                    root.settings.rating-questionable = self.selected;
+                                    root.settings.rating-questionable = self.checked;
                                     root.settings-changed();
                                 }
                             }
-                            FilterChip {
-                                label: "explicit";
-                                selected: root.settings.rating-explicit;
+                            Switch {
+                                text: "Explicit";
+                                checked: root.settings.rating-explicit;
                                 toggled => {
-                                    root.settings.rating-explicit = self.selected;
+                                    root.settings.rating-explicit = self.checked;
+                                    root.settings-changed();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Skip media types
+                Card {
+                    VerticalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        padding-top: 18px;
+                        padding-bottom: 18px;
+                        spacing: 12px;
+
+                        SectionTitle { title: "Skip media types"; }
+                        Caption { label: "Excluded from every search via -type: filters."; }
+
+                        VerticalLayout {
+                            spacing: 8px;
+                            Switch {
+                                text: "Skip videos (.webm)";
+                                checked: root.settings.skip-video;
+                                toggled => {
+                                    root.settings.skip-video = self.checked;
+                                    root.settings-changed();
+                                }
+                            }
+                            Switch {
+                                text: "Skip flash (.swf)";
+                                checked: root.settings.skip-flash;
+                                toggled => {
+                                    root.settings.skip-flash = self.checked;
+                                    root.settings-changed();
+                                }
+                            }
+                            Switch {
+                                text: "Skip animations (.gif)";
+                                checked: root.settings.skip-animation;
+                                toggled => {
+                                    root.settings.skip-animation = self.checked;
                                     root.settings-changed();
                                 }
                             }

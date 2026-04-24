@@ -541,7 +541,7 @@ async fn discover_posts(
         }
 
         let page = client
-            .search_page(tags, &cfg.blacklist, cfg.rating, before_id)
+            .search_page(tags, &cfg.blacklist, cfg.rating, cfg.media_skip, before_id)
             .await?;
 
         pages_scanned += 1;

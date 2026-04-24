@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use crate::config::{Config, RatingFilter, Site};
+use crate::config::{Config, MediaSkip, RatingFilter, Site};
 use crate::credentials::Credentials;
 use crate::download::{DownloadEvent, DownloadManager, JobHandle};
 use crate::e621::Client;
@@ -387,6 +387,21 @@ impl Controller {
             self.cfg.rating = new_rating;
             self.cfg_dirty = true;
         }
+        let new_skip = MediaSkip {
+            video: s.skip_video,
+            flash: s.skip_flash,
+            animation: s.skip_animation,
+        };
+        if (new_skip.video, new_skip.flash, new_skip.animation)
+            != (
+                self.cfg.media_skip.video,
+                self.cfg.media_skip.flash,
+                self.cfg.media_skip.animation,
+            )
+        {
+            self.cfg.media_skip = new_skip;
+            self.cfg_dirty = true;
+        }
         let new_blacklist: Vec<String> = s
             .blacklist
             .to_string()
@@ -553,6 +568,9 @@ fn push_settings(ctrl: &Controller, ui: &AppWindow) {
         rating_safe: ctrl.cfg.rating.safe,
         rating_questionable: ctrl.cfg.rating.questionable,
         rating_explicit: ctrl.cfg.rating.explicit,
+        skip_video: ctrl.cfg.media_skip.video,
+        skip_flash: ctrl.cfg.media_skip.flash,
+        skip_animation: ctrl.cfg.media_skip.animation,
         blacklist: ctrl.cfg.blacklist.join("\n").into(),
     });
     ui.set_logged_in(ctrl.creds_loaded_from_store);

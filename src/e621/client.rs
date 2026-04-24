@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::rate_limit::{ApiLimiter, new_api_limiter};
 use super::types::{Post, PostsResponse};
-use crate::config::{RatingFilter, Site};
+use crate::config::{MediaSkip, RatingFilter, Site};
 use crate::credentials::Credentials;
 use crate::util::safe_truncate;
 
@@ -100,9 +100,10 @@ impl Client {
         tags: &str,
         blacklist: &[String],
         rating: RatingFilter,
+        media_skip: MediaSkip,
         before_id: Option<u64>,
     ) -> Result<Vec<Post>> {
-        let full_query = build_query_string(tags, blacklist, rating);
+        let full_query = build_query_string(tags, blacklist, rating, media_skip);
         let url = format!("https://{}/posts.json", self.site.host());
 
         self.limiter.until_ready().await;
@@ -149,7 +150,12 @@ pub fn build_user_agent(creds: Option<&Credentials>) -> String {
     }
 }
 
-fn build_query_string(tags: &str, blacklist: &[String], rating: RatingFilter) -> String {
+fn build_query_string(
+    tags: &str,
+    blacklist: &[String],
+    rating: RatingFilter,
+    media_skip: MediaSkip,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     let trimmed = tags.trim();
     if !trimmed.is_empty() {
@@ -166,6 +172,9 @@ fn build_query_string(tags: &str, blacklist: &[String], rating: RatingFilter) ->
         } else {
             parts.push(format!("-{b}"));
         }
+    }
+    for token in media_skip.as_query_tokens() {
+        parts.push(token.to_string());
     }
     if let Some(frag) = rating.as_query_fragment() {
         parts.push(frag);
