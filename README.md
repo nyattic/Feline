@@ -13,10 +13,11 @@ credentials in your OS keychain.
 
 ## Features
 
-- Queue multiple tag searches
-- Pause and resume active jobs
+- Save tag searches as bookmarks; re-run them to fetch only new posts
+- Serial job queue: extra Download requests wait behind the active job
+- Pause, resume, or cancel the active job at any time
 - Switch between e621 and e926
-- Filter by rating and global blacklist tags
+- Filter by rating, blacklist tags, and skip-media-type toggles (videos, flash, animations)
 - Deduplicate files per query folder by MD5
 - Verify downloaded files by size and checksum
 - Store username and API key in the OS credential store
@@ -27,9 +28,11 @@ credentials in your OS keychain.
 1. Generate an API key from your e621/e926 account settings.
 2. Open Feline and log in from Settings. Credentials are saved in your OS
    credential store, not in `config.json`.
-3. Choose a download folder, site, rating filter, and optional blacklist tags.
-4. Add one or more tag queries on the Queue page.
-5. Click Download to scan matching posts and fetch anything missing.
+3. Choose a download folder, site, rating filter, blacklist, and any media types to skip.
+4. On the Queue page, type a tag search and press Download — the query is
+   saved and the job starts in one action.
+5. Re-run a saved query later with its row's Download button to pull only
+   posts that are new since last run.
 
 Downloaded files are saved under the selected download folder as:
 
@@ -72,13 +75,13 @@ Run from source:
 cargo run --release
 ```
 
-The release binary is written to `target/release/feline`.
+The release binary is written to `target/release/feline` (or `feline.exe` on Windows).
 
 ## Configuration
 
 Feline stores app data next to the executable:
 
-- `config.json` for download folder, saved queries, blacklist, and rating filters
+- `config.json` for download folder, saved queries, blacklist, rating, and skip-media-type filters
 - `state.json` for per-query failed post IDs and last-run timestamps
 - `log/app*.log` for daily-rotated logs
 - OS keychain, Credential Manager, or Secret Service for credentials
