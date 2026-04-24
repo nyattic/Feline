@@ -50,6 +50,15 @@ The query folder name is sanitized for the local filesystem. The MD5 is the
 post file hash from e621/e926, so Feline can detect already-downloaded files in
 that query folder.
 
+## Network Access
+
+Feline connects directly to e621/e926. If those sites are blocked or restricted
+in your country or network, for example in South Korea, the app may fail to log
+in, search, or download files.
+
+Use a VPN or another lawful network route that can access e621/e926, and make
+sure you follow the laws and rules that apply where you live.
+
 ## API Notes
 
 Feline uses a descriptive `User-Agent` and authenticates with HTTP Basic auth
