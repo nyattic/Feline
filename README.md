@@ -17,18 +17,6 @@ credentials in your OS keychain.
 - Store username and API key in the OS credential store
 - Keep live logs in-app and daily log files on disk
 
-## Why Feline?
-
-Feline is meant for people who want to repeatedly archive specific tag searches,
-artists, or favorite-style queries without managing command-line scripts or
-browser tabs. It keeps each query as its own repeatable job, scans the target
-folder before downloading, skips files that are already present, and remembers
-posts that are permanently unavailable.
-
-It is not a gallery manager like Hydrus and it is not intended to replace
-general-purpose tools like gallery-dl. The focus is a small native UI for
-e621/e926 search downloads with predictable folders and verified files.
-
 ## Usage
 
 1. Generate an API key from your e621/e926 account settings.
@@ -45,8 +33,7 @@ Downloaded files are saved under the selected download folder as:
 ```
 
 The query folder name is sanitized for the local filesystem. The MD5 is the
-post file hash from e621/e926, so Feline can detect already-downloaded files in
-that query folder.
+post file hash from e621/e926.
 
 ## Network Access
 
@@ -54,8 +41,7 @@ Feline connects directly to e621/e926. If those sites are blocked or restricted
 in your country or network, for example in South Korea, the app may fail to log
 in, search, or download files.
 
-Use a VPN or another lawful network route that can access e621/e926, and make
-sure you follow the laws and rules that apply where you live.
+Use a VPN or another lawful network route that can access e621/e926.
 
 ## API Notes
 
