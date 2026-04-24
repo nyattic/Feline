@@ -1,8 +1,8 @@
 # Feline
 
-![Release](https://img.shields.io/github/v/release/nyabi021/Ditto?style=flat&color=6366f1)
-![Downloads](https://img.shields.io/github/downloads/nyabi021/Ditto/total?style=flat&color=10b981)
-![Last Commit](https://img.shields.io/github/last-commit/nyabi021/Ditto?style=flat&color=f59e0b)
+![Release](https://img.shields.io/github/v/release/nyabi021/Feline?style=flat&color=6366f1)
+![Downloads](https://img.shields.io/github/downloads/nyabi021/Feline/total?style=flat&color=10b981)
+![Last Commit](https://img.shields.io/github/last-commit/nyabi021/Feline?style=flat&color=f59e0b)
 ![License](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat)
 
 A native desktop downloader for e621 and e926 tag searches.
