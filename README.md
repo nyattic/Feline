@@ -6,8 +6,6 @@ Feline turns saved tag queries into managed download jobs. It handles API rate
 limits, retries, deduplication, filtering, and failed-post state while keeping
 credentials in your OS keychain.
 
-Repository: <https://github.com/nyabi021/Feline>
-
 ## Features
 
 - Queue multiple tag searches
