@@ -12,6 +12,7 @@ use super::worker::{DownloadError, download_post};
 use crate::config::Config;
 use crate::credentials::Credentials;
 use crate::e621::Client;
+use crate::e621::rate_limit::{ApiLimiter, new_api_limiter};
 use crate::state::StateStore;
 
 pub const CONCURRENT_DOWNLOADS: usize = 4;
@@ -157,13 +158,11 @@ pub struct DownloadManager {
     events: mpsc::UnboundedSender<DownloadEvent>,
     next_job_id: AtomicU64,
     state: StateStore,
+    limiter: Arc<ApiLimiter>,
 }
 
 impl DownloadManager {
-    pub fn new(
-        rt: Handle,
-        state: StateStore,
-    ) -> (Self, mpsc::UnboundedReceiver<DownloadEvent>) {
+    pub fn new(rt: Handle, state: StateStore) -> (Self, mpsc::UnboundedReceiver<DownloadEvent>) {
         let (tx, rx) = mpsc::unbounded_channel();
         (
             Self {
@@ -171,6 +170,7 @@ impl DownloadManager {
                 events: tx,
                 next_job_id: std::sync::atomic::AtomicU64::new(1),
                 state,
+                limiter: new_api_limiter(),
             },
             rx,
         )
@@ -184,12 +184,11 @@ impl DownloadManager {
         cfg: Config,
         creds: Option<Credentials>,
     ) -> anyhow::Result<JobHandle> {
-        let job_id = self
-            .next_job_id
-            .fetch_add(1, Ordering::Relaxed);
+        let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let control = Arc::new(JobControl::new());
         let events = self.events.clone();
         let state = self.state.clone();
+        let limiter = self.limiter.clone();
 
         let tags_for_log = tags.clone();
         let control_for_task = control.clone();
@@ -203,9 +202,12 @@ impl DownloadManager {
                 tags,
                 cfg,
                 creds,
-                control_for_task,
-                events.clone(),
-                state,
+                RunJobRuntime {
+                    limiter,
+                    control: control_for_task,
+                    events: events.clone(),
+                    state,
+                },
             )
             .await
             {
@@ -216,10 +218,7 @@ impl DownloadManager {
             }
         });
 
-        Ok(JobHandle {
-            job_id,
-            control,
-        })
+        Ok(JobHandle { job_id, control })
     }
 }
 
@@ -277,6 +276,13 @@ struct ProgressState {
     window_start: Instant,
 }
 
+struct RunJobRuntime {
+    limiter: Arc<ApiLimiter>,
+    control: Arc<JobControl>,
+    events: mpsc::UnboundedSender<DownloadEvent>,
+    state: StateStore,
+}
+
 fn handle_download_outcome(
     outcome: DownloadOutcome,
     job_id: u64,
@@ -316,9 +322,7 @@ fn handle_download_outcome(
                 error: err_str.clone(),
             });
             if err.is_permanent() {
-                state.update(tags, |s| {
-                    s.failed.insert(post_id);
-                });
+                mark_post_permanently_failed(state, tags, post_id);
             }
             let bps = compute_bps(&mut progress.window_start, &mut progress.bytes_in_window);
             let _ = events.send(DownloadEvent::Progress {
@@ -331,6 +335,15 @@ fn handle_download_outcome(
             });
             tracing::warn!("post {post_id} failed: {err_str}");
         }
+    }
+}
+
+fn mark_post_permanently_failed(state: &StateStore, tags: &str, post_id: u64) {
+    state.update(tags, |s| {
+        s.failed.insert(post_id);
+    });
+    if let Err(e) = state.save() {
+        tracing::warn!("state save failed after marking post {post_id} failed: {e}");
     }
 }
 
@@ -372,11 +385,15 @@ async fn run_job(
     tags: String,
     cfg: Config,
     creds: Option<Credentials>,
-    control: Arc<JobControl>,
-    events: mpsc::UnboundedSender<DownloadEvent>,
-    state: StateStore,
+    runtime: RunJobRuntime,
 ) -> anyhow::Result<()> {
-    let client = Client::new(cfg.site, creds.clone())?;
+    let RunJobRuntime {
+        limiter,
+        control,
+        events,
+        state,
+    } = runtime;
+    let client = Client::with_limiter(cfg.site, creds.clone(), limiter)?;
     let download_root = cfg.download_dir.clone();
     tokio::fs::create_dir_all(&download_root).await.ok();
 
@@ -441,6 +458,12 @@ async fn run_job(
             }
             if post.file.url.is_none() {
                 skipped_failed += 1;
+                mark_post_permanently_failed(&state, &tags, post.id);
+                let _ = events.send(DownloadEvent::PostFailed {
+                    job_id,
+                    post_id: post.id,
+                    error: "post has no file url (deleted or restricted)".into(),
+                });
                 continue;
             }
 

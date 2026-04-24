@@ -45,10 +45,11 @@ impl Md5Index {
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_ascii_lowercase());
             if let Some(stem) = stem
-                && let Some(md5) = extract_md5(&stem) {
-                    set.insert(md5.to_string());
-                }
+                && let Some(md5) = extract_md5(&stem)
+            {
+                set.insert(md5.to_string());
             }
+        }
         tracing::info!(
             "md5 index scanned: {} existing files at {}",
             set.len(),

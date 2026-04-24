@@ -116,7 +116,10 @@ impl Controller {
         if self.log_lines.len() >= LOG_LINE_CAP {
             self.log_lines.pop_front();
         }
-        self.log_lines.push_back(LogLine { level, text: text.into() });
+        self.log_lines.push_back(LogLine {
+            level,
+            text: text.into(),
+        });
     }
 
     pub fn save_config_if_dirty(&mut self) {
@@ -190,14 +193,23 @@ impl Controller {
                 }
                 self.push_log(LogLevel::Info, format!("[{job_id}] started: {tags}"));
             }
-            DownloadEvent::Discovering { job_id, pages_scanned, posts_queued } => {
+            DownloadEvent::Discovering {
+                job_id,
+                pages_scanned,
+                posts_queued,
+            } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
                     j.phase = JobPhase::Discovering;
                     j.pages_scanned = pages_scanned;
                     j.total = posts_queued;
                 }
             }
-            DownloadEvent::DiscoveryDone { job_id, total_posts, skipped_existing, skipped_failed } => {
+            DownloadEvent::DiscoveryDone {
+                job_id,
+                total_posts,
+                skipped_existing,
+                skipped_failed,
+            } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
                     j.phase = JobPhase::Downloading;
                     j.total = total_posts;
@@ -209,7 +221,14 @@ impl Controller {
                     ),
                 );
             }
-            DownloadEvent::Progress { job_id, done, failed, total, current, bytes_per_sec } => {
+            DownloadEvent::Progress {
+                job_id,
+                done,
+                failed,
+                total,
+                current,
+                bytes_per_sec,
+            } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
                     j.done = done;
                     j.failed = failed;
@@ -218,13 +237,23 @@ impl Controller {
                     j.bytes_per_sec = bytes_per_sec;
                 }
             }
-            DownloadEvent::PostFailed { job_id, post_id, error } => {
+            DownloadEvent::PostFailed {
+                job_id,
+                post_id,
+                error,
+            } => {
                 self.push_log(
                     LogLevel::Warn,
                     format!("[{job_id}] post {post_id} failed: {error}"),
                 );
             }
-            DownloadEvent::JobFinished { job_id, done, failed, total, duration_ms } => {
+            DownloadEvent::JobFinished {
+                job_id,
+                done,
+                failed,
+                total,
+                duration_ms,
+            } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
                     j.phase = JobPhase::Finished;
                     j.finished = true;
@@ -253,18 +282,16 @@ impl Controller {
             }
             DownloadEvent::JobPaused { job_id } => {
                 if let Some(j) = self.jobs.get_mut(&job_id)
-                    && j.phase != JobPhase::Paused {
-                        j.phase_before_pause = Some(j.phase);
-                        j.phase = JobPhase::Paused;
+                    && j.phase != JobPhase::Paused
+                {
+                    j.phase_before_pause = Some(j.phase);
+                    j.phase = JobPhase::Paused;
                 }
                 self.push_log(LogLevel::Info, format!("[{job_id}] paused"));
             }
             DownloadEvent::JobResumed { job_id } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
-                    j.phase = j
-                        .phase_before_pause
-                        .take()
-                        .unwrap_or(JobPhase::Downloading);
+                    j.phase = j.phase_before_pause.take().unwrap_or(JobPhase::Downloading);
                     j.current_file = None;
                     j.bytes_per_sec = 0;
                 }
@@ -308,9 +335,15 @@ impl Controller {
             questionable: s.rating_questionable,
             explicit: s.rating_explicit,
         };
-        if (new_rating.safe, new_rating.questionable, new_rating.explicit)
-            != (self.cfg.rating.safe, self.cfg.rating.questionable, self.cfg.rating.explicit)
-        {
+        if (
+            new_rating.safe,
+            new_rating.questionable,
+            new_rating.explicit,
+        ) != (
+            self.cfg.rating.safe,
+            self.cfg.rating.questionable,
+            self.cfg.rating.explicit,
+        ) {
             self.cfg.rating = new_rating;
             self.cfg_dirty = true;
         }
@@ -387,7 +420,9 @@ fn format_stats(j: &JobState) -> String {
     let speed = format_bps(j.bytes_per_sec);
     match j.phase {
         JobPhase::Discovering => format!("{} pages · {} queued", j.pages_scanned, j.total),
-        JobPhase::Downloading => format!("{}/{} · {} failed · {}", j.done, j.total, j.failed, speed),
+        JobPhase::Downloading => {
+            format!("{}/{} · {} failed · {}", j.done, j.total, j.failed, speed)
+        }
         JobPhase::Paused => format!("{}/{} · {} failed · paused", j.done, j.total, j.failed),
         JobPhase::Finished | JobPhase::Cancelled => {
             format!("{}/{} · {} failed", j.done, j.total, j.failed)
@@ -548,19 +583,20 @@ pub fn bind(
             if let Some(ui) = ui_weak.upgrade() {
                 let mut c = ctrl.lock();
                 if let Some(j) = c.jobs.get_mut(&(id as u64))
-                    && let Some(h) = &j.handle {
-                        if h.is_paused() {
-                            h.resume();
-                            j.phase = j.phase_before_pause.take().unwrap_or(JobPhase::Downloading);
-                            j.current_file = None;
-                            j.bytes_per_sec = 0;
-                        } else if j.phase != JobPhase::Paused {
-                            h.pause();
-                            j.phase_before_pause = Some(j.phase);
-                            j.phase = JobPhase::Paused;
-                        }
-                        push_jobs(&c, &ui);
+                    && let Some(h) = &j.handle
+                {
+                    if h.is_paused() {
+                        h.resume();
+                        j.phase = j.phase_before_pause.take().unwrap_or(JobPhase::Downloading);
+                        j.current_file = None;
+                        j.bytes_per_sec = 0;
+                    } else if j.phase != JobPhase::Paused {
+                        h.pause();
+                        j.phase_before_pause = Some(j.phase);
+                        j.phase = JobPhase::Paused;
                     }
+                    push_jobs(&c, &ui);
+                }
             }
         });
     }
@@ -593,8 +629,8 @@ pub fn bind(
             let ctrl_inner = ctrl.clone();
             rt_for_login.spawn(async move {
                 let result: Result<(), String> = async {
-                    let client = Client::new(site, Some(creds.clone()))
-                        .map_err(|e| format!("{e}"))?;
+                    let client =
+                        Client::new(site, Some(creds.clone())).map_err(|e| format!("{e}"))?;
                     client.verify_login().await.map_err(|e| format!("{e:#}"))?;
                     Ok(())
                 }

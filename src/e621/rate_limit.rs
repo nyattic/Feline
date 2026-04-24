@@ -1,6 +1,6 @@
-use governor::{Quota, RateLimiter};
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
+use governor::{Quota, RateLimiter};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 

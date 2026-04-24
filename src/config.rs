@@ -32,7 +32,11 @@ pub struct RatingFilter {
 
 impl RatingFilter {
     pub fn all() -> Self {
-        Self { safe: true, questionable: true, explicit: true }
+        Self {
+            safe: true,
+            questionable: true,
+            explicit: true,
+        }
     }
 
     /// Returns e621 rating filter tokens to append to a search query.
@@ -127,7 +131,11 @@ impl Config {
     pub fn new_query(&mut self, tags: String) -> u64 {
         let id = self.next_query_id;
         self.next_query_id = self.next_query_id.saturating_add(1);
-        self.queries.push(TagQuery { id, tags, enabled: true });
+        self.queries.push(TagQuery {
+            id,
+            tags,
+            enabled: true,
+        });
         id
     }
 

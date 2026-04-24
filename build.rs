@@ -25,8 +25,7 @@ fn embed_windows_icon() {
         let resized = img.resize_exact(size, size, FilterType::Lanczos3);
         let rgba = resized.to_rgba8();
         let icon_image = ico::IconImage::from_rgba_data(size, size, rgba.into_raw());
-        icon_dir
-            .add_entry(ico::IconDirEntry::encode(&icon_image).expect("encode ico entry"));
+        icon_dir.add_entry(ico::IconDirEntry::encode(&icon_image).expect("encode ico entry"));
     }
     let file = BufWriter::new(File::create(&ico_path).expect("create icon.ico"));
     icon_dir.write(file).expect("write icon.ico");

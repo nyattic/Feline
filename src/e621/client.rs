@@ -7,6 +7,7 @@ use super::rate_limit::{ApiLimiter, new_api_limiter};
 use super::types::{Post, PostsResponse};
 use crate::config::{RatingFilter, Site};
 use crate::credentials::Credentials;
+use crate::util::safe_truncate;
 
 const MAX_LIMIT: u32 = 320;
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -21,6 +22,14 @@ pub struct Client {
 
 impl Client {
     pub fn new(site: Site, creds: Option<Credentials>) -> Result<Self> {
+        Self::with_limiter(site, creds, new_api_limiter())
+    }
+
+    pub fn with_limiter(
+        site: Site,
+        creds: Option<Credentials>,
+        limiter: Arc<ApiLimiter>,
+    ) -> Result<Self> {
         let ua = build_user_agent(creds.as_ref());
         let mut default_headers = HeaderMap::new();
         default_headers.insert(USER_AGENT, HeaderValue::from_str(&ua)?);
@@ -35,7 +44,7 @@ impl Client {
 
         Ok(Self {
             http,
-            limiter: new_api_limiter(),
+            limiter,
             site,
             creds,
         })
@@ -74,7 +83,11 @@ impl Client {
         }
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("login check failed: HTTP {} {}", status, truncate(&body, 200)));
+            return Err(anyhow!(
+                "login check failed: HTTP {} {}",
+                status,
+                safe_truncate(&body, 200)
+            ));
         }
         Ok(())
     }
@@ -106,8 +119,9 @@ impl Client {
         }
 
         if let Some(creds) = &self.creds
-            && !creds.is_empty() {
-                req = req.basic_auth(&creds.username, Some(&creds.api_key));
+            && !creds.is_empty()
+        {
+            req = req.basic_auth(&creds.username, Some(&creds.api_key));
         }
 
         let resp = req.send().await.context("send search request")?;
@@ -117,14 +131,11 @@ impl Client {
             return Err(anyhow!(
                 "search failed: HTTP {} {}",
                 status,
-                truncate(&body, 300)
+                safe_truncate(&body, 300)
             ));
         }
 
-        let parsed: PostsResponse = resp
-            .json()
-            .await
-            .context("decode posts.json response")?;
+        let parsed: PostsResponse = resp.json().await.context("decode posts.json response")?;
         Ok(parsed.posts)
     }
 }
@@ -138,11 +149,7 @@ pub fn build_user_agent(creds: Option<&Credentials>) -> String {
     }
 }
 
-fn build_query_string(
-    tags: &str,
-    blacklist: &[String],
-    rating: RatingFilter,
-) -> String {
+fn build_query_string(tags: &str, blacklist: &[String], rating: RatingFilter) -> String {
     let mut parts: Vec<String> = Vec::new();
     let trimmed = tags.trim();
     if !trimmed.is_empty() {
@@ -164,12 +171,4 @@ fn build_query_string(
         parts.push(frag);
     }
     parts.join(" ")
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..n])
-    }
 }

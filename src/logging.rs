@@ -17,9 +17,8 @@ pub fn init() -> Result<WorkerGuard> {
 
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("info,feline=debug,hyper=warn,reqwest=warn")
-    });
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,feline=debug,hyper=warn,reqwest=warn"));
 
     let file_layer = fmt::layer()
         .with_writer(non_blocking)
@@ -27,9 +26,7 @@ pub fn init() -> Result<WorkerGuard> {
         .with_target(true)
         .with_line_number(true);
 
-    let console_layer = fmt::layer()
-        .with_target(false)
-        .with_line_number(false);
+    let console_layer = fmt::layer().with_target(false).with_line_number(false);
 
     tracing_subscriber::registry()
         .with(env_filter)
