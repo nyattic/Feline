@@ -1,10 +1,55 @@
 use std::path::PathBuf;
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn exe_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(target_os = "macos")]
+fn home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Where `config.json` and `state.json` live.
+#[cfg(target_os = "macos")]
+pub fn config_dir() -> PathBuf {
+    home_dir().join("Library/Application Support/Feline")
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn config_dir() -> PathBuf {
+    exe_dir()
+}
+
+pub fn state_dir() -> PathBuf {
+    config_dir()
+}
+
+/// Where rotated log files are written.
+#[cfg(target_os = "macos")]
+pub fn log_dir() -> PathBuf {
+    home_dir().join("Library/Logs/Feline")
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn log_dir() -> PathBuf {
+    exe_dir().join("log")
+}
+
+/// Default download destination shown to first-time users.
+#[cfg(target_os = "macos")]
+pub fn default_download_dir() -> PathBuf {
+    home_dir().join("Downloads/Feline")
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn default_download_dir() -> PathBuf {
+    exe_dir().join("downloads")
 }
 
 pub fn sanitize_path_component(raw: &str) -> String {

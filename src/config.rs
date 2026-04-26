@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::util::exe_dir;
+use crate::util::{config_dir, default_download_dir};
 
 pub const DEFAULT_CONFIG_FILENAME: &str = "config.json";
 
@@ -116,7 +116,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             site: Site::default(),
-            download_dir: exe_dir().join("downloads"),
+            download_dir: default_download_dir(),
             blacklist: Vec::new(),
             rating: RatingFilter::all(),
             media_skip: MediaSkip::default(),
@@ -128,7 +128,7 @@ impl Default for Config {
 
 impl Config {
     pub fn default_path() -> PathBuf {
-        exe_dir().join(DEFAULT_CONFIG_FILENAME)
+        config_dir().join(DEFAULT_CONFIG_FILENAME)
     }
 
     pub fn load_or_default(path: &Path) -> Self {

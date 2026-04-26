@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::util::exe_dir;
+use crate::util::state_dir;
 
 pub const DEFAULT_STATE_FILENAME: &str = "state.json";
 
@@ -34,7 +34,7 @@ pub struct StateStore {
 
 impl StateStore {
     pub fn default_path() -> PathBuf {
-        exe_dir().join(DEFAULT_STATE_FILENAME)
+        state_dir().join(DEFAULT_STATE_FILENAME)
     }
 
     pub fn load(path: &Path) -> Self {

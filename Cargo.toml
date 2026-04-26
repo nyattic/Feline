@@ -5,6 +5,15 @@ edition = "2024"
 rust-version = "1.95.0"
 license = "MIT"
 
+[package.metadata.bundle]
+name = "Feline"
+identifier = "com.nyabi.feline"
+icon = ["assets/icon.icns"]
+copyright = "Copyright (c) 2026 nyabi"
+category = "public.app-category.utilities"
+short_description = "e621/e926 tag downloader"
+long_description = "A native desktop downloader for e621 and e926 tag searches."
+
 [dependencies]
 slint = "1.16.1"
 

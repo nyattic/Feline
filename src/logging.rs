@@ -3,10 +3,10 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::util::exe_dir;
+use crate::util;
 
 pub fn init() -> Result<WorkerGuard> {
-    let log_dir = exe_dir().join("log");
+    let log_dir = util::log_dir();
     std::fs::create_dir_all(&log_dir)?;
 
     let file_appender = RollingFileAppender::builder()
