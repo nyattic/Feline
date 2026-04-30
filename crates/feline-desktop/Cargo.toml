@@ -1,0 +1,53 @@
+[package]
+name = "feline-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "feline"
+path = "src/main.rs"
+
+[package.metadata.bundle]
+name = "Feline"
+identifier = "com.nyabi.feline"
+icon = ["../../assets/icon.icns"]
+copyright = "Copyright (c) 2026 nyabi"
+category = "public.app-category.utilities"
+short_description = "e621/e926 tag downloader"
+long_description = "A native desktop downloader for e621 and e926 tag searches."
+
+[dependencies]
+slint = "1.16.1"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+tokio-util = { version = "0.7.18", features = ["io"] }
+futures = "0.3.32"
+parking_lot = "0.12.5"
+reqwest = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+rustls-platform-verifier = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+md-5 = { workspace = true }
+hex = { workspace = true }
+governor = { workspace = true }
+backon = { workspace = true }
+walkdir = "2.5.0"
+rfd = "0.17.2"
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2.5"
+time = { workspace = true }
+
+[build-dependencies]
+slint-build = "1.16.1"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+ico = "0.5.0"

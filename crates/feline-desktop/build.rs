@@ -1,6 +1,6 @@
 fn main() {
     let config = slint_build::CompilerConfiguration::new().with_style("fluent-dark".into());
-    slint_build::compile_with_config("ui/app.slint", config).expect("slint compile failed");
+    slint_build::compile_with_config("../../ui/app.slint", config).expect("slint compile failed");
 
     #[cfg(windows)]
     embed_windows_icon();
@@ -13,7 +13,7 @@ fn embed_windows_icon() {
     use std::io::BufWriter;
     use std::path::PathBuf;
 
-    let png_path = "assets/icon.png";
+    let png_path = "../../assets/icon.png";
     println!("cargo:rerun-if-changed={png_path}");
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
