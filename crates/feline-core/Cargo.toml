@@ -4,3 +4,20 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+
+[lib]
+name = "feline_core"
+crate-type = ["lib"]
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+rustls-platform-verifier = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+governor = { workspace = true }
+tracing = { workspace = true }

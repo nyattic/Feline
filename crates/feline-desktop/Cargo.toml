@@ -19,6 +19,7 @@ short_description = "e621/e926 tag downloader"
 long_description = "A native desktop downloader for e621 and e926 tag searches."
 
 [dependencies]
+feline-core = { path = "../feline-core" }
 slint = "1.16.1"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 tokio-util = { version = "0.7.18", features = ["io"] }

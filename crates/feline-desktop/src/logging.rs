@@ -3,7 +3,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::util;
+use feline_core::util;
 
 pub fn init() -> Result<WorkerGuard> {
     let log_dir = util::log_dir();

@@ -11,10 +11,10 @@ use super::dedup::Md5Index;
 use super::worker::{DownloadError, download_post};
 use crate::config::Config;
 use crate::credentials::Credentials;
-use crate::e621::Client;
-use crate::e621::Post;
-use crate::e621::rate_limit::{ApiLimiter, new_api_limiter};
 use crate::state::StateStore;
+use feline_core::e621::client::Client;
+use feline_core::e621::types::Post;
+use feline_core::e621::rate_limit::{ApiLimiter, new_api_limiter};
 
 pub const CONCURRENT_DOWNLOADS: usize = 4;
 
