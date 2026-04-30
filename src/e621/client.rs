@@ -3,6 +3,7 @@ use reqwest::header::{ACCEPT, HeaderMap, HeaderValue, USER_AGENT};
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::ech::configure_ech_client;
 use super::rate_limit::{ApiLimiter, new_api_limiter};
 use super::types::{Post, PostsResponse};
 use crate::config::{MediaSkip, RatingFilter, Site};
@@ -14,18 +15,19 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone)]
 pub struct Client {
-    http: reqwest::Client,
+    api_http: reqwest::Client,
+    download_http: reqwest::Client,
     limiter: Arc<ApiLimiter>,
     site: Site,
     creds: Option<Credentials>,
 }
 
 impl Client {
-    pub fn new(site: Site, creds: Option<Credentials>) -> Result<Self> {
-        Self::with_limiter(site, creds, new_api_limiter())
+    pub async fn new(site: Site, creds: Option<Credentials>) -> Result<Self> {
+        Self::with_limiter(site, creds, new_api_limiter()).await
     }
 
-    pub fn with_limiter(
+    pub async fn with_limiter(
         site: Site,
         creds: Option<Credentials>,
         limiter: Arc<ApiLimiter>,
@@ -35,15 +37,27 @@ impl Client {
         default_headers.insert(USER_AGENT, HeaderValue::from_str(&ua)?);
         default_headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
 
-        let http = reqwest::Client::builder()
+        let download_headers = default_headers.clone();
+        let base_builder = reqwest::Client::builder()
             .default_headers(default_headers)
+            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(15));
+
+        let api_http = configure_ech_client(base_builder, site.host())
+            .await
+            .build()
+            .context("build API reqwest client")?;
+
+        let download_http = reqwest::Client::builder()
+            .default_headers(download_headers)
             .timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(15))
             .build()
-            .context("build reqwest client")?;
+            .context("build download reqwest client")?;
 
         Ok(Self {
-            http,
+            api_http,
+            download_http,
             limiter,
             site,
             creds,
@@ -51,7 +65,7 @@ impl Client {
     }
 
     pub fn http(&self) -> &reqwest::Client {
-        &self.http
+        &self.download_http
     }
 
     /// Hit an authenticated endpoint to confirm the provided credentials work.
@@ -69,7 +83,7 @@ impl Client {
         self.limiter.until_ready().await;
 
         let resp = self
-            .http
+            .api_http
             .get(&url)
             .query(&[("limit", "1")])
             .basic_auth(&creds.username, Some(&creds.api_key))
@@ -109,7 +123,7 @@ impl Client {
         self.limiter.until_ready().await;
 
         let mut req = self
-            .http
+            .api_http
             .get(&url)
             .query(&[("tags", full_query.as_str())])
             .query(&[("limit", MAX_LIMIT.to_string().as_str())]);

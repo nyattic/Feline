@@ -1,6 +1,6 @@
 [package]
 name = "feline"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.95.0"
 license = "MIT"
@@ -23,6 +23,9 @@ futures = "0.3.32"
 parking_lot = "0.12.5"
 
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "stream", "query", "rustls", "gzip", "brotli", "http2"] }
+rustls = "0.23.39"
+rustls-pki-types = "1.14.0"
+rustls-platform-verifier = "0.6.2"
 
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

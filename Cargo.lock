@@ -1576,7 +1576,7 @@ dependencies = [
 
 [[package]]
 name = "feline"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "backon",
@@ -1590,6 +1590,9 @@ dependencies = [
  "parking_lot",
  "reqwest",
  "rfd",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "slint",
@@ -4901,6 +4904,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c2c118cb077cca2822033836dfb1b975355dfb784b5e8da48f7b6c5db74e60e"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",

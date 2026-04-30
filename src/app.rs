@@ -275,10 +275,7 @@ impl Controller {
                 }
             }
             DownloadEvent::PostFailed { post_id, error } => {
-                self.push_log(
-                    LogLevel::Warn,
-                    format!("post {post_id} failed: {error}"),
-                );
+                self.push_log(LogLevel::Warn, format!("post {post_id} failed: {error}"));
             }
             DownloadEvent::JobFinished {
                 job_id,
@@ -725,8 +722,9 @@ pub fn bind(
             let ctrl_inner = ctrl.clone();
             rt_for_login.spawn(async move {
                 let result: Result<(), String> = async {
-                    let client =
-                        Client::new(site, Some(creds.clone())).map_err(|e| format!("{e}"))?;
+                    let client = Client::new(site, Some(creds.clone()))
+                        .await
+                        .map_err(|e| format!("{e}"))?;
                     client.verify_login().await.map_err(|e| format!("{e:#}"))?;
                     Ok(())
                 }
