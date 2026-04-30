@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::util::state_dir;
+use feline_core::util::state_dir;
 
 pub const DEFAULT_STATE_FILENAME: &str = "state.json";
 

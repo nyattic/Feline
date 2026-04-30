@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 use walkdir::WalkDir;
 
-use crate::util::sanitize_path_component;
+use feline_core::util::sanitize_path_component;
 
 /// In-memory set of MD5 hashes already present in a single tag folder.
 /// Scoped per-tag (not global), so the same image can legitimately be

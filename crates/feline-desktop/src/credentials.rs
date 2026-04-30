@@ -1,21 +1,10 @@
 use anyhow::{Context, Result};
 use keyring::Entry;
-use serde::{Deserialize, Serialize};
+
+pub use feline_core::Credentials;
 
 const SERVICE: &str = "feline";
 const USER_KEY: &str = "default";
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Credentials {
-    pub username: String,
-    pub api_key: String,
-}
-
-impl Credentials {
-    pub fn is_empty(&self) -> bool {
-        self.username.is_empty() || self.api_key.is_empty()
-    }
-}
 
 pub fn load() -> Result<Option<Credentials>> {
     let entry = Entry::new(SERVICE, USER_KEY).context("open keyring entry")?;

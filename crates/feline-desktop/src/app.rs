@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use crate::config::{Config, MediaSkip, RatingFilter, Site};
 use crate::credentials::Credentials;
 use crate::download::{DownloadEvent, DownloadManager, JobHandle};
-use crate::e621::Client;
+use feline_core::e621::Client;
 use crate::state::StateStore;
 use crate::{AppWindow, JobData, LogEntry, SettingsData, TagQueryData};
 

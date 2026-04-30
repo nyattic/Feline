@@ -10,8 +10,8 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
 use super::manager::JobControl;
-use crate::e621::Post;
-use crate::util::{safe_truncate, sanitize_path_component};
+use feline_core::e621::types::Post;
+use feline_core::util::{safe_truncate, sanitize_path_component};
 
 pub const MAX_RETRIES: usize = 5;
 const ALLOWED_FILE_HOSTS: &[&str] = &["static1.e621.net", "static1.e926.net"];

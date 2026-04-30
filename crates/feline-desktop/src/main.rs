@@ -7,10 +7,8 @@ mod app;
 mod config;
 mod credentials;
 mod download;
-mod e621;
 mod logging;
 mod state;
-mod util;
 
 slint::include_modules!();
 

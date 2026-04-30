@@ -1577,6 +1577,19 @@ dependencies = [
 [[package]]
 name = "feline-core"
 version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "governor",
+ "reqwest",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "feline-desktop"
@@ -1584,6 +1597,7 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "backon",
+ "feline-core",
  "futures",
  "governor",
  "hex",
