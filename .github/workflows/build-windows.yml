@@ -30,15 +30,19 @@ jobs:
       - name: Build release executable
         run: cargo build --locked --release
 
+      - name: Rename executable
+        shell: pwsh
+        run: Copy-Item target/release/feline.exe "Feline-${{ github.ref_name }}-windows-x86_64.exe"
+
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
           name: feline-windows-x86_64
-          path: target/release/feline.exe
+          path: Feline-${{ github.ref_name }}-windows-x86_64.exe
           if-no-files-found: error
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/feline.exe
+          files: Feline-${{ github.ref_name }}-windows-x86_64.exe
           generate_release_notes: true
