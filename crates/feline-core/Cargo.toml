@@ -7,7 +7,12 @@ license.workspace = true
 
 [lib]
 name = "feline_core"
-crate-type = ["lib"]
+crate-type = ["lib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen-feline"
+path = "uniffi-bindgen.rs"
+required-features = []
 
 [features]
 default = []
@@ -25,4 +30,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 governor = { workspace = true }
 tracing = { workspace = true }
-uniffi = { version = "0.31", features = ["tokio"] }
+uniffi = { version = "0.31", features = ["tokio", "cli"] }
