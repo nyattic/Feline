@@ -9,6 +9,10 @@ SWIFT_OUT="$OUT/swift"
 
 cd "$ROOT"
 
+# Match the iOS deployment target consumed by the embedding Xcode project.
+# Override with IPHONEOS_DEPLOYMENT_TARGET=... when invoking this script.
+export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-26.2}"
+
 # 1. Build static libs for each iOS target
 cargo build --release --target aarch64-apple-ios          -p $CRATE
 cargo build --release --target aarch64-apple-ios-sim      -p $CRATE
