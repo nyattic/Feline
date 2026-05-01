@@ -27,7 +27,8 @@ pub struct EchDnsConfig {
 pub async fn configure_ech_client(
     builder: reqwest::ClientBuilder,
     host: &str,
-) -> reqwest::ClientBuilder {
+    fail_closed: bool,
+) -> anyhow::Result<reqwest::ClientBuilder> {
     match fetch_ech_dns_config(host).await {
         Ok(cfg) => match build_ech_tls_config(&cfg) {
             Ok(tls) => {
@@ -36,21 +37,23 @@ pub async fn configure_ech_client(
                     addrs = cfg.addrs.len(),
                     "enabled ECH for API connections"
                 );
-                let builder = builder.use_preconfigured_tls(tls);
-                if cfg.addrs.is_empty() {
-                    builder
+                let b = builder.use_preconfigured_tls(tls);
+                Ok(if cfg.addrs.is_empty() {
+                    b
                 } else {
-                    builder.resolve_to_addrs(host, &cfg.addrs)
-                }
+                    b.resolve_to_addrs(host, &cfg.addrs)
+                })
             }
+            Err(e) if fail_closed => Err(e.context("ECH TLS config required but unavailable")),
             Err(e) => {
                 tracing::warn!(host, "ECH TLS config unavailable, using normal TLS: {e:#}");
-                builder
+                Ok(builder)
             }
         },
+        Err(e) if fail_closed => Err(e.context("ECH DNS config required but unavailable")),
         Err(e) => {
             tracing::warn!(host, "ECH DNS config unavailable, using normal TLS: {e:#}");
-            builder
+            Ok(builder)
         }
     }
 }
