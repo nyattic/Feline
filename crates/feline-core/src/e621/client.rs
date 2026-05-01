@@ -13,6 +13,11 @@ use crate::util::safe_truncate;
 const MAX_LIMIT: u32 = 320;
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub struct RawResponse {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
 #[derive(Clone)]
 pub struct Client {
     api_http: reqwest::Client,
@@ -24,13 +29,14 @@ pub struct Client {
 
 impl Client {
     pub async fn new(site: Site, creds: Option<Credentials>) -> Result<Self> {
-        Self::with_limiter(site, creds, new_api_limiter()).await
+        Self::with_limiter(site, creds, new_api_limiter(), false).await
     }
 
     pub async fn with_limiter(
         site: Site,
         creds: Option<Credentials>,
         limiter: Arc<ApiLimiter>,
+        fail_closed_ech: bool,
     ) -> Result<Self> {
         let ua = build_user_agent(creds.as_ref());
         let mut default_headers = HeaderMap::new();
@@ -43,8 +49,8 @@ impl Client {
             .timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(15));
 
-        let api_http = configure_ech_client(base_builder, site.host())
-            .await
+        let api_http = configure_ech_client(base_builder, site.host(), fail_closed_ech)
+            .await?
             .build()
             .context("build API reqwest client")?;
 
@@ -152,6 +158,49 @@ impl Client {
 
         let parsed: PostsResponse = resp.json().await.context("decode posts.json response")?;
         Ok(parsed.posts)
+    }
+
+    pub async fn raw_request(
+        &self,
+        method: &str,
+        path: &str,
+        query: &[(String, String)],
+        body: Option<Vec<u8>>,
+        content_type: Option<&str>,
+    ) -> anyhow::Result<RawResponse> {
+        let url = format!("https://{}{}", self.site.host(), path);
+        self.limiter.until_ready().await;
+
+        let mut req = match method {
+            "GET" => self.api_http.get(&url),
+            "POST" => self.api_http.post(&url),
+            "DELETE" => self.api_http.delete(&url),
+            "PUT" => self.api_http.put(&url),
+            other => anyhow::bail!("unsupported HTTP method {other}"),
+        };
+
+        if !query.is_empty() {
+            req = req.query(query);
+        }
+
+        if let Some(creds) = &self.creds {
+            if !creds.is_empty() {
+                req = req.basic_auth(&creds.username, Some(&creds.api_key));
+            }
+        }
+
+        if let Some(b) = body {
+            req = req.body(b);
+            if let Some(ct) = content_type {
+                req = req.header(reqwest::header::CONTENT_TYPE, ct);
+            }
+        }
+
+        let resp = req.send().await?;
+        Ok(RawResponse {
+            status: resp.status().as_u16(),
+            body: resp.bytes().await?.to_vec(),
+        })
     }
 }
 

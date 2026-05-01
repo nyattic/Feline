@@ -389,7 +389,7 @@ async fn run_job(
         events,
         state,
     } = runtime;
-    let client = Client::with_limiter(cfg.site, creds.clone(), limiter).await?;
+    let client = Client::with_limiter(cfg.site, creds.clone(), limiter, false).await?;
     let download_root = cfg.download_dir.clone();
     tokio::fs::create_dir_all(&download_root).await.ok();
 
