@@ -9,6 +9,10 @@ license.workspace = true
 name = "feline_core"
 crate-type = ["lib"]
 
+[features]
+default = []
+ffi = []
+
 [dependencies]
 anyhow = { workspace = true }
 thiserror = { workspace = true }
@@ -21,3 +25,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 governor = { workspace = true }
 tracing = { workspace = true }
+uniffi = { version = "0.31", features = ["tokio"] }

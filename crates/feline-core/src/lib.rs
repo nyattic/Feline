@@ -1,3 +1,5 @@
+uniffi::setup_scaffolding!();
+
 pub mod config;
 pub mod credentials;
 pub mod e621;
