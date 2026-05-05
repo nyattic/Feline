@@ -1,0 +1,167 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked --release -p feline-desktop
+
+      - name: Stage artifact
+        shell: pwsh
+        run: Copy-Item target/release/feline.exe "Feline-${{ github.ref_name }}-windows-x86_64.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: Feline-*.exe
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS DMG (Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-aarch64
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --locked
+
+      - name: Build
+        run: cargo build --locked --release --target aarch64-apple-darwin -p feline-desktop
+
+      - name: Bundle .app
+        working-directory: crates/feline-desktop
+        run: cargo bundle --release --target aarch64-apple-darwin
+
+      - name: Ad-hoc sign
+        run: codesign --force --deep --sign - target/aarch64-apple-darwin/release/bundle/osx/Feline.app
+
+      - name: Build DMG
+        run: |
+          set -euo pipefail
+          APP="target/aarch64-apple-darwin/release/bundle/osx/Feline.app"
+          DMG="Feline-${{ github.ref_name }}-macos-arm64.dmg"
+          mkdir -p dmg-staging
+          cp -R "$APP" dmg-staging/
+          ln -sf /Applications dmg-staging/Applications
+          hdiutil create -volname "Feline" -srcfolder dmg-staging -ov -format UDZO "$DMG"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: Feline-*.dmg
+          if-no-files-found: error
+
+  linux:
+    name: Build Linux AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev \
+            libfontconfig1-dev libssl-dev libdbus-1-dev \
+            pkg-config
+
+      - name: Build
+        run: cargo build --locked --release -p feline-desktop
+
+      - name: Stage AppDir
+        run: |
+          set -euo pipefail
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          cp target/release/feline AppDir/usr/bin/feline
+          cp assets/icon.png AppDir/usr/share/icons/hicolor/256x256/apps/feline.png
+          cp assets/icon.png AppDir/feline.png
+          cat > AppDir/feline.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Feline
+          GenericName=e621/e926 tag downloader
+          Comment=Native desktop downloader for e621 and e926 tag searches
+          Exec=feline
+          Icon=feline
+          Categories=Utility;Network;
+          Terminal=false
+          EOF
+          cp AppDir/feline.desktop AppDir/usr/share/applications/
+
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          set -euo pipefail
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage
+          mv Feline*.AppImage "Feline-${{ github.ref_name }}-linux-x86_64.AppImage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: Feline-*.AppImage
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/windows/*
+            artifacts/macos/*
+            artifacts/linux/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
