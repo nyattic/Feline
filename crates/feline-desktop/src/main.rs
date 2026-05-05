@@ -9,42 +9,52 @@ mod credentials;
 mod download;
 mod logging;
 mod state;
+mod theme;
+mod view;
 
-slint::include_modules!();
+use std::sync::Arc;
 
 use anyhow::Result;
-use slint::ComponentHandle;
-use std::sync::Arc;
+use iced::window;
+
+use crate::app::App;
+use crate::download::DownloadManager;
+use crate::state::StateStore;
 
 fn main() -> Result<()> {
     let _log_guard = logging::init()?;
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("feline-rt")
         .build()?;
-    let rt_handle = rt.handle().clone();
+    let rt_handle = runtime.handle().clone();
 
-    std::thread::Builder::new()
-        .name("tokio-driver".into())
-        .spawn(move || {
-            rt.block_on(async {
-                let mut never = tokio::time::interval(std::time::Duration::from_secs(3600));
-                loop {
-                    never.tick().await;
-                }
-            });
-        })?;
+    let state_store = StateStore::load(&StateStore::default_path());
+    let (manager, events_rx) = DownloadManager::new(rt_handle, state_store);
+    let manager = Arc::new(manager);
+    let manager_for_boot = manager.clone();
 
-    let ui = AppWindow::new().map_err(|e| anyhow::anyhow!("slint new: {e}"))?;
+    let mut events_rx = Some(events_rx);
+    let mut manager_for_boot = Some(manager_for_boot);
 
-    let (controller, events_rx) = app::Controller::new(rt_handle.clone());
-    let controller = Arc::new(parking_lot::Mutex::new(controller));
+    iced::application(App::title, App::update, App::view)
+        .subscription(App::subscription)
+        .theme(App::theme)
+        .window(window::Settings {
+            size: iced::Size::new(1100.0, 720.0),
+            min_size: Some(iced::Size::new(800.0, 500.0)),
+            ..Default::default()
+        })
+        .run_with(move || {
+            App::boot(
+                events_rx.take().expect("boot called twice"),
+                manager_for_boot.take().expect("boot called twice"),
+            )
+        })
+        .map_err(|e| anyhow::anyhow!("iced run: {e}"))?;
 
-    app::bind(&ui, controller.clone(), rt_handle, events_rx);
-
-    ui.run().map_err(|e| anyhow::anyhow!("slint run: {e}"))?;
-
-    controller.lock().shutdown();
+    drop(manager);
+    drop(runtime);
     Ok(())
 }

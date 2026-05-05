@@ -13,12 +13,11 @@ use crate::config::Config;
 use crate::credentials::Credentials;
 use crate::state::StateStore;
 use feline_core::e621::client::Client;
-use feline_core::e621::types::Post;
 use feline_core::e621::rate_limit::{ApiLimiter, new_api_limiter};
+use feline_core::e621::types::Post;
 
 pub const CONCURRENT_DOWNLOADS: usize = 4;
 
-/// Events the manager emits back to the UI.
 #[derive(Debug, Clone)]
 pub enum DownloadEvent {
     JobStarted {
@@ -167,7 +166,7 @@ impl DownloadManager {
             Self {
                 rt,
                 events: tx,
-                next_job_id: std::sync::atomic::AtomicU64::new(1),
+                next_job_id: AtomicU64::new(1),
                 state,
                 limiter: new_api_limiter(),
             },
@@ -175,14 +174,7 @@ impl DownloadManager {
         )
     }
 
-    /// Spawns a new download job that walks every matching page and downloads
-    /// posts not already on disk (MD5-deduplicated per tag folder).
-    pub fn spawn_job(
-        &self,
-        tags: String,
-        cfg: Config,
-        creds: Option<Credentials>,
-    ) -> anyhow::Result<JobHandle> {
+    pub fn spawn_job(&self, tags: String, cfg: Config, creds: Option<Credentials>) -> JobHandle {
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let control = Arc::new(JobControl::new());
         let events = self.events.clone();
@@ -194,7 +186,7 @@ impl DownloadManager {
         self.rt.spawn(async move {
             let _ = events.send(DownloadEvent::JobStarted {
                 job_id,
-                tags: tags_for_log.clone(),
+                tags: tags_for_log,
             });
             if let Err(e) = run_job(
                 job_id,
@@ -217,14 +209,10 @@ impl DownloadManager {
             }
         });
 
-        Ok(JobHandle { job_id, control })
+        JobHandle { job_id, control }
     }
 }
 
-/// Blocks while `paused` is set. Returns true if the job was cancelled (either
-/// while waiting or already cancelled at entry) so the caller can bail out.
-/// Emits JobPaused/JobResumed events exactly once per transition; no events if
-/// we're not paused at entry.
 async fn wait_while_paused(
     job_id: u64,
     control: &JobControl,
@@ -244,8 +232,6 @@ async fn wait_while_paused(
         if !control.is_paused() {
             break;
         }
-        // Register the waker *before* rechecking the flag to avoid a lost-wake
-        // race (pause cleared between the check and await).
         let notified = control.wake.notified();
         if !control.is_paused() || control.is_cancelled() {
             break;
@@ -405,9 +391,6 @@ async fn run_job(
     let http = client.http().clone();
     let start = Instant::now();
 
-    // Phase 1 — discover every page before any download starts. Until this
-    // returns, the UI shows pages-scanned/queued and the bar stays empty,
-    // because we don't know the final total yet.
     let discovery = match discover_posts(
         job_id,
         &tags,
@@ -422,7 +405,7 @@ async fn run_job(
     .await?
     {
         Some(r) => r,
-        None => return Ok(()), // cancelled mid-discovery
+        None => return Ok(()),
     };
 
     let total = discovery.to_download.len();
@@ -444,7 +427,6 @@ async fn run_job(
         return Ok(());
     }
 
-    // Phase 2 — drain the discovered list with bounded concurrency.
     let mut progress = ProgressState {
         done: 0,
         failed: 0,

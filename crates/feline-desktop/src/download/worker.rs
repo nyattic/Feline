@@ -14,6 +14,7 @@ use feline_core::e621::types::Post;
 use feline_core::util::{safe_truncate, sanitize_path_component};
 
 pub const MAX_RETRIES: usize = 5;
+const VERIFY_RETRIES: usize = 1;
 const ALLOWED_FILE_HOSTS: &[&str] = &["static1.e621.net", "static1.e926.net"];
 
 #[derive(Debug, thiserror::Error)]
@@ -38,10 +39,6 @@ pub enum DownloadError {
     Other(#[from] anyhow::Error),
 }
 
-/// Resolves the final on-disk path for a post: `{root}/{tags}/{artist}__{md5}.{ext}`.
-/// `tags` is the raw tag-query string the user entered; it becomes the folder
-/// name (sanitized). Artist is embedded in the filename so the same image
-/// downloaded under a different query still carries its attribution.
 pub fn target_path(root: &Path, tags: &str, post: &Post) -> PathBuf {
     let folder = sanitize_path_component(tags);
     let artist = sanitize_path_component(post.primary_artist());
@@ -50,9 +47,6 @@ pub fn target_path(root: &Path, tags: &str, post: &Post) -> PathBuf {
     root.join(folder).join(format!("{artist}__{md5}.{ext}"))
 }
 
-/// Downloads a single post with exponential backoff retry. On success returns
-/// the final path. Any retriable network/IO error is retried up to MAX_RETRIES;
-/// permanent errors (no url, md5 mismatch after all retries) bubble up.
 pub async fn download_post(
     http: &reqwest::Client,
     post: &Post,
@@ -101,13 +95,21 @@ pub async fn download_post(
         .await
     };
 
+    let mut verify_remaining = VERIFY_RETRIES;
     let result = attempt
         .retry(backoff)
         .when(|e| match e {
-            DownloadError::Md5Mismatch { .. } => true,
-            DownloadError::SizeMismatch { .. } | DownloadError::SizeExceeded { .. } => true,
+            DownloadError::Md5Mismatch { .. }
+            | DownloadError::SizeMismatch { .. }
+            | DownloadError::SizeExceeded { .. } => {
+                if verify_remaining > 0 {
+                    verify_remaining -= 1;
+                    true
+                } else {
+                    false
+                }
+            }
             DownloadError::Http { status, .. } => {
-                // 4xx (except 408, 429) are not worth retrying.
                 !(400..500).contains(status) || *status == 408 || *status == 429
             }
             DownloadError::Other(_) => true,
@@ -212,7 +214,6 @@ async fn stream_to_file_verified(
 
     let actual_md5 = hex::encode(hasher.finalize());
     if actual_md5 != expected_md5 {
-        // Remove corrupted partial so next attempt starts clean.
         let _ = tokio::fs::remove_file(tmp_path).await;
         return Err(DownloadError::Md5Mismatch {
             expected: expected_md5.to_string(),

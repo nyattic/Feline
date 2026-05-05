@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 pub type ApiLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
-/// e621's documented API rate limit is 2 requests per second, per app.
 pub const API_RPS: u32 = 2;
 
 pub fn new_api_limiter() -> Arc<ApiLimiter> {
