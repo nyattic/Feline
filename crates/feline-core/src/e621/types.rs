@@ -17,7 +17,6 @@ pub struct PostFile {
     pub ext: String,
     pub size: u64,
     pub md5: String,
-    /// `url` may be null for e.g. deleted posts or rating restrictions.
     pub url: Option<String>,
 }
 
@@ -28,7 +27,6 @@ pub struct PostTags {
 }
 
 impl Post {
-    /// Returns the first artist tag or "unknown_artist" if none.
     pub fn primary_artist(&self) -> &str {
         self.tags
             .artist

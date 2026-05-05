@@ -11,17 +11,14 @@ pub const DEFAULT_STATE_FILENAME: &str = "state.json";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QueryState {
-    /// Post ids permanently skipped (retry budget exhausted).
     #[serde(default)]
     pub failed: HashSet<u64>,
-    /// Unix seconds of last successful run.
     #[serde(default)]
     pub last_run: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StateFile {
-    /// Keyed by raw tag string (exactly what the user entered).
     #[serde(default)]
     pub queries: BTreeMap<String, QueryState>,
 }

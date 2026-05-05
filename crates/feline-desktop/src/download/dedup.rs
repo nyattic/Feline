@@ -6,10 +6,6 @@ use walkdir::WalkDir;
 
 use feline_core::util::sanitize_path_component;
 
-/// In-memory set of MD5 hashes already present in a single tag folder.
-/// Scoped per-tag (not global), so the same image can legitimately be
-/// downloaded into multiple tag folders — each folder is a self-contained
-/// snapshot of its query.
 #[derive(Clone, Default)]
 pub struct Md5Index {
     inner: Arc<RwLock<HashSet<String>>>,
@@ -20,9 +16,6 @@ impl Md5Index {
         Self::default()
     }
 
-    /// Walks `{root}/{sanitized tags}` once and collects MD5 hashes from
-    /// filenames of the form `{artist}__{md5}.{ext}` (and the legacy
-    /// `{md5}.{ext}` shape, for files left over from the old layout).
     pub fn scan(root: &Path, tags: &str) -> Self {
         let mut set = HashSet::new();
         let folder = root.join(sanitize_path_component(tags));
@@ -69,8 +62,6 @@ impl Md5Index {
     }
 }
 
-/// Extracts the md5 hex component from a filename stem. Supports both the
-/// current `{artist}__{md5}` shape and a bare `{md5}` stem.
 fn extract_md5(stem: &str) -> Option<&str> {
     let candidate = stem.rsplit("__").next()?;
     if is_md5_hex(candidate) {

@@ -58,6 +58,8 @@ impl From<anyhow::Error> for FfiError {
         let s = format!("{e:#}");
         if s.contains("ECH") {
             FfiError::EchUnavailable(s)
+        } else if s.contains("path must start with '/'") || s.contains("unsupported HTTP method") {
+            FfiError::InvalidArgument(s)
         } else {
             FfiError::Network(s)
         }

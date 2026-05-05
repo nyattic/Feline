@@ -74,8 +74,6 @@ impl Client {
         &self.download_http
     }
 
-    /// Hit an authenticated endpoint to confirm the provided credentials work.
-    /// Returns Ok(()) on 2xx, Err with a readable message on 401/other failure.
     pub async fn verify_login(&self) -> Result<()> {
         let creds = self
             .creds
@@ -112,9 +110,6 @@ impl Client {
         Ok(())
     }
 
-    /// Search a single page of posts. `before_id` paginates backwards through
-    /// the result set using e621's `page=b{id}` form, which scales past 750 deep.
-    /// When `before_id` is None, returns the newest page.
     pub async fn search_page(
         &self,
         tags: &str,
@@ -168,6 +163,9 @@ impl Client {
         body: Option<Vec<u8>>,
         content_type: Option<&str>,
     ) -> anyhow::Result<RawResponse> {
+        if !path.starts_with('/') {
+            anyhow::bail!("path must start with '/'");
+        }
         let url = format!("https://{}{}", self.site.host(), path);
         self.limiter.until_ready().await;
 
@@ -183,10 +181,10 @@ impl Client {
             req = req.query(query);
         }
 
-        if let Some(creds) = &self.creds {
-            if !creds.is_empty() {
-                req = req.basic_auth(&creds.username, Some(&creds.api_key));
-            }
+        if let Some(creds) = &self.creds
+            && !creds.is_empty()
+        {
+            req = req.basic_auth(&creds.username, Some(&creds.api_key));
         }
 
         if let Some(b) = body {
@@ -229,7 +227,6 @@ fn build_query_string(
         if b.is_empty() {
             continue;
         }
-        // Negate if not already negated.
         if b.starts_with('-') {
             parts.push(b.to_string());
         } else {

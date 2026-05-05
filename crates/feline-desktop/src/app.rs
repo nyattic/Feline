@@ -1,55 +1,75 @@
-use parking_lot::Mutex;
-use slint::ComponentHandle;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::Arc;
-use tokio::runtime::Handle;
-use tokio::sync::mpsc;
+use std::time::Duration;
 
-use crate::config::{Config, MediaSkip, RatingFilter, Site};
+use futures::StreamExt;
+use iced::widget::{container, row};
+use iced::{Element, Length, Subscription, Task};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+
+use crate::config::{Config, Site, TagQuery};
 use crate::credentials::Credentials;
 use crate::download::{DownloadEvent, DownloadManager, JobHandle};
-use feline_core::e621::Client;
 use crate::state::StateStore;
-use crate::{AppWindow, JobData, LogEntry, SettingsData, TagQueryData};
+use crate::theme;
+use crate::view;
+use feline_core::e621::Client;
 
 const LOG_LINE_CAP: usize = 2000;
+const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
+const PHASE_TICK: Duration = Duration::from_millis(400);
 
-pub struct Controller {
-    pub cfg: Config,
-    pub cfg_path: PathBuf,
-    pub cfg_dirty: bool,
-
-    pub creds: Credentials,
-    pub creds_loaded_from_store: bool,
-    pub creds_store_error: Option<String>,
-    pub creds_dirty: bool,
-
-    pub state_store: StateStore,
-    pub manager: Arc<DownloadManager>,
-
-    pub jobs: HashMap<u64, JobState>,
-    /// Tag queries waiting their turn. Drained in FIFO order whenever the
-    /// currently active job reaches a terminal state.
-    pub pending_tags: VecDeque<String>,
-    pub log_lines: VecDeque<LogLine>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Queue,
+    Settings,
+    Log,
 }
 
-#[derive(Debug)]
-pub struct JobState {
-    pub tags: String,
-    pub phase: JobPhase,
-    /// Phase to restore on resume; populated only while paused.
-    pub phase_before_pause: Option<JobPhase>,
-    pub pages_scanned: u32,
-    pub total: usize,
-    pub done: usize,
-    pub failed: usize,
-    pub current_file: Option<String>,
-    pub bytes_per_sec: u64,
-    pub handle: Option<JobHandle>,
-    pub finished: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiteOption {
+    E621,
+    E926,
+}
+
+impl SiteOption {
+    fn from_site(s: Site) -> Self {
+        match s {
+            Site::E621 => Self::E621,
+            Site::E926 => Self::E926,
+        }
+    }
+
+    fn into_site(self) -> Site {
+        match self {
+            Self::E621 => Site::E621,
+            Self::E926 => Site::E926,
+        }
+    }
+}
+
+impl std::fmt::Display for SiteOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::E621 => f.write_str("e621.net (NSFW)"),
+            Self::E926 => f.write_str("e926.net (SFW)"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct LogLine {
+    pub level: LogLevel,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,21 +83,123 @@ pub enum JobPhase {
     Errored,
 }
 
+pub struct JobState {
+    pub tags: String,
+    pub phase: JobPhase,
+    pub phase_before_pause: Option<JobPhase>,
+    pub pages_scanned: u32,
+    pub total: usize,
+    pub done: usize,
+    pub failed: usize,
+    pub current_file: Option<String>,
+    pub bytes_per_sec: u64,
+    pub handle: Option<JobHandle>,
+    pub finished: bool,
+}
+
 #[derive(Debug, Clone)]
-pub struct LogLine {
-    pub level: LogLevel,
-    pub text: String,
+pub struct QueryView {
+    pub id: u64,
+    pub tags: String,
+    pub failed_count: usize,
+    pub running: bool,
+    pub queued: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogLevel {
-    Info,
-    Warn,
-    Error,
+#[derive(Debug, Clone)]
+pub struct JobView {
+    pub id: u64,
+    pub tags: String,
+    pub phase_color_idx: u8,
+    pub phase_label: String,
+    pub phase_dots: String,
+    pub stats_label: String,
+    pub progress: f32,
+    pub current_file: String,
+    pub finished: bool,
+    pub paused: bool,
 }
 
-impl Controller {
-    pub fn new(rt: Handle) -> (Self, mpsc::UnboundedReceiver<DownloadEvent>) {
+#[derive(Debug, Clone)]
+pub struct SettingsForm {
+    pub username: String,
+    pub api_key: String,
+    pub creds_loaded: bool,
+    pub creds_checking: bool,
+    pub creds_error: String,
+    pub site: SiteOption,
+    pub download_dir: String,
+    pub rating_safe: bool,
+    pub rating_questionable: bool,
+    pub rating_explicit: bool,
+    pub skip_video: bool,
+    pub skip_flash: bool,
+    pub skip_animation: bool,
+    pub blacklist: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    TabSelected(Tab),
+    NewQueryChanged(String),
+    StartJob(String),
+    RemoveQuery(u64),
+    CancelQuery(u64),
+    TogglePauseJob(u64),
+
+    UsernameChanged(String),
+    ApiKeyChanged(String),
+    SiteChanged(SiteOption),
+    DownloadDirChanged(String),
+    PickFolder,
+    FolderPicked(Option<PathBuf>),
+    RatingSafe(bool),
+    RatingQuestionable(bool),
+    RatingExplicit(bool),
+    SkipVideo(bool),
+    SkipFlash(bool),
+    SkipAnimation(bool),
+    BlacklistChanged(String),
+    ConfigSaveTick(u64),
+
+    Login,
+    LoginCompleted(Result<(), String>),
+    Logout,
+
+    ClearLogs,
+
+    DownloadEvent(DownloadEvent),
+    PhaseTick,
+}
+
+pub struct App {
+    cfg: Config,
+    cfg_path: PathBuf,
+    save_token: u64,
+
+    creds: Credentials,
+    creds_loaded_from_store: bool,
+    creds_store_error: Option<String>,
+    creds_checking: bool,
+
+    state_store: StateStore,
+    manager: Arc<DownloadManager>,
+
+    jobs: HashMap<u64, JobState>,
+    pending_tags: VecDeque<String>,
+    log_lines: VecDeque<LogLine>,
+
+    active_tab: Tab,
+    new_query_buf: String,
+    settings_form: SettingsForm,
+    phase_tick: u8,
+}
+
+impl App {
+    pub fn boot(
+        events_rx: UnboundedReceiver<DownloadEvent>,
+        manager: Arc<DownloadManager>,
+    ) -> (Self, Task<Message>) {
         let cfg_path = Config::default_path();
         let cfg = Config::load_or_default(&cfg_path);
 
@@ -88,35 +210,355 @@ impl Controller {
         };
 
         let state_store = StateStore::load(&StateStore::default_path());
-        let (manager, events_rx) = DownloadManager::new(rt, state_store.clone());
+        let settings_form = build_settings_form(&cfg, &creds, creds_loaded, creds_err.as_deref());
 
-        let ctrl = Self {
+        let app = Self {
             cfg,
             cfg_path,
-            cfg_dirty: false,
+            save_token: 0,
             creds,
             creds_loaded_from_store: creds_loaded,
             creds_store_error: creds_err,
-            creds_dirty: false,
+            creds_checking: false,
             state_store,
-            manager: Arc::new(manager),
+            manager,
             jobs: HashMap::new(),
             pending_tags: VecDeque::new(),
             log_lines: VecDeque::with_capacity(LOG_LINE_CAP),
+            active_tab: Tab::Queue,
+            new_query_buf: String::new(),
+            settings_form,
+            phase_tick: 0,
         };
-        (ctrl, events_rx)
+
+        let stream = UnboundedReceiverStream::new(events_rx).map(Message::DownloadEvent);
+        let event_task = Task::stream(stream);
+        (app, event_task)
     }
 
-    pub fn shutdown(&mut self) {
-        self.save_config_if_dirty();
-        for j in self.jobs.values() {
-            if let Some(h) = &j.handle {
-                h.cancel();
+    pub fn title(&self) -> String {
+        "Feline".to_string()
+    }
+
+    pub fn theme(&self) -> iced::Theme {
+        theme::build()
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        let any_active_phase = self.jobs.values().any(|j| {
+            !j.finished
+                && matches!(
+                    j.phase,
+                    JobPhase::Starting | JobPhase::Discovering | JobPhase::Downloading
+                )
+        });
+        if any_active_phase {
+            iced::time::every(PHASE_TICK).map(|_| Message::PhaseTick)
+        } else {
+            Subscription::none()
+        }
+    }
+
+    pub fn update(&mut self, msg: Message) -> Task<Message> {
+        match msg {
+            Message::TabSelected(tab) => {
+                self.active_tab = tab;
+                Task::none()
+            }
+            Message::NewQueryChanged(s) => {
+                self.new_query_buf = s;
+                Task::none()
+            }
+            Message::StartJob(tags) => {
+                self.start_job(tags);
+                self.new_query_buf.clear();
+                Task::none()
+            }
+            Message::RemoveQuery(id) => {
+                let removed_tags = self
+                    .cfg
+                    .queries
+                    .iter()
+                    .find(|q| q.id == id)
+                    .map(|q| q.tags.clone());
+                self.cfg.remove_query(id);
+                if let Some(tags) = removed_tags {
+                    self.pending_tags.retain(|t| t != &tags);
+                }
+                self.persist_config_now();
+                Task::none()
+            }
+            Message::CancelQuery(id) => {
+                let Some(tags) = self
+                    .cfg
+                    .queries
+                    .iter()
+                    .find(|q| q.id == id)
+                    .map(|q| q.tags.clone())
+                else {
+                    return Task::none();
+                };
+                let was_pending = self.pending_tags.iter().any(|t| t == &tags);
+                self.pending_tags.retain(|t| t != &tags);
+                let active_id = self
+                    .jobs
+                    .iter()
+                    .find(|(_, j)| !j.finished && j.tags == tags)
+                    .map(|(k, _)| *k);
+                if let Some(job_id) = active_id {
+                    if let Some(j) = self.jobs.get(&job_id)
+                        && let Some(h) = j.handle.as_ref()
+                    {
+                        h.cancel();
+                    }
+                    self.push_log(LogLevel::Info, format!("cancel requested: {tags}"));
+                } else if was_pending {
+                    self.push_log(LogLevel::Info, format!("removed from queue: {tags}"));
+                }
+                Task::none()
+            }
+            Message::TogglePauseJob(id) => {
+                if let Some(j) = self.jobs.get_mut(&id)
+                    && let Some(h) = &j.handle
+                {
+                    if h.is_paused() {
+                        h.resume();
+                        j.phase = j.phase_before_pause.take().unwrap_or(JobPhase::Downloading);
+                        j.current_file = None;
+                        j.bytes_per_sec = 0;
+                    } else if j.phase != JobPhase::Paused {
+                        h.pause();
+                        j.phase_before_pause = Some(j.phase);
+                        j.phase = JobPhase::Paused;
+                    }
+                }
+                Task::none()
+            }
+
+            Message::UsernameChanged(v) => {
+                self.settings_form.username = v.clone();
+                self.creds.username = v;
+                Task::none()
+            }
+            Message::ApiKeyChanged(v) => {
+                self.settings_form.api_key = v.clone();
+                self.creds.api_key = v;
+                Task::none()
+            }
+            Message::SiteChanged(site) => {
+                self.settings_form.site = site;
+                self.cfg.site = site.into_site();
+                self.schedule_save()
+            }
+            Message::DownloadDirChanged(dir) => {
+                self.settings_form.download_dir = dir.clone();
+                self.cfg.download_dir = PathBuf::from(dir);
+                self.schedule_save()
+            }
+            Message::PickFolder => {
+                let start = self.cfg.download_dir.clone();
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Choose download folder")
+                            .set_directory(start)
+                            .pick_folder()
+                            .await
+                            .map(|h| h.path().to_path_buf())
+                    },
+                    Message::FolderPicked,
+                )
+            }
+            Message::FolderPicked(Some(path)) => {
+                self.cfg.download_dir = path.clone();
+                self.settings_form.download_dir = path.display().to_string();
+                self.persist_config_now();
+                Task::none()
+            }
+            Message::FolderPicked(None) => Task::none(),
+            Message::RatingSafe(v) => {
+                self.settings_form.rating_safe = v;
+                self.cfg.rating.safe = v;
+                self.schedule_save()
+            }
+            Message::RatingQuestionable(v) => {
+                self.settings_form.rating_questionable = v;
+                self.cfg.rating.questionable = v;
+                self.schedule_save()
+            }
+            Message::RatingExplicit(v) => {
+                self.settings_form.rating_explicit = v;
+                self.cfg.rating.explicit = v;
+                self.schedule_save()
+            }
+            Message::SkipVideo(v) => {
+                self.settings_form.skip_video = v;
+                self.cfg.media_skip.video = v;
+                self.schedule_save()
+            }
+            Message::SkipFlash(v) => {
+                self.settings_form.skip_flash = v;
+                self.cfg.media_skip.flash = v;
+                self.schedule_save()
+            }
+            Message::SkipAnimation(v) => {
+                self.settings_form.skip_animation = v;
+                self.cfg.media_skip.animation = v;
+                self.schedule_save()
+            }
+            Message::BlacklistChanged(s) => {
+                self.settings_form.blacklist = s.clone();
+                self.cfg.blacklist = s
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                self.schedule_save()
+            }
+            Message::ConfigSaveTick(token) => {
+                if token == self.save_token {
+                    self.persist_config_now();
+                }
+                Task::none()
+            }
+
+            Message::Login => {
+                if self.creds.is_empty() || self.creds_checking {
+                    return Task::none();
+                }
+                self.creds_checking = true;
+                self.settings_form.creds_checking = true;
+                self.settings_form.creds_error.clear();
+                let creds = self.creds.clone();
+                let site = self.cfg.site;
+                Task::perform(
+                    async move {
+                        let client = Client::new(site, Some(creds))
+                            .await
+                            .map_err(|e| format!("{e}"))?;
+                        client.verify_login().await.map_err(|e| format!("{e:#}"))
+                    },
+                    Message::LoginCompleted,
+                )
+            }
+            Message::LoginCompleted(result) => {
+                self.creds_checking = false;
+                self.settings_form.creds_checking = false;
+                match result {
+                    Ok(()) => match crate::credentials::save(&self.creds) {
+                        Ok(()) => {
+                            self.creds_loaded_from_store = true;
+                            self.creds_store_error = None;
+                            self.settings_form.creds_loaded = true;
+                            self.settings_form.creds_error.clear();
+                            self.push_log(
+                                LogLevel::Info,
+                                "logged in, credentials saved to OS keyring",
+                            );
+                        }
+                        Err(e) => {
+                            self.creds_store_error = Some(format!("{e}"));
+                            self.settings_form.creds_error = format!("{e}");
+                            self.push_log(LogLevel::Error, format!("credentials save failed: {e}"));
+                        }
+                    },
+                    Err(err) => {
+                        self.creds_loaded_from_store = false;
+                        self.creds_store_error = Some(err.clone());
+                        self.settings_form.creds_loaded = false;
+                        self.settings_form.creds_error = err.clone();
+                        self.push_log(LogLevel::Error, format!("login failed: {err}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::Logout => {
+                self.creds = Credentials::default();
+                self.creds_loaded_from_store = false;
+                self.creds_store_error = None;
+                self.settings_form.username.clear();
+                self.settings_form.api_key.clear();
+                self.settings_form.creds_loaded = false;
+                self.settings_form.creds_error.clear();
+                if let Err(e) = crate::credentials::clear() {
+                    self.push_log(LogLevel::Warn, format!("logout: {e}"));
+                } else {
+                    self.push_log(LogLevel::Info, "logged out");
+                }
+                Task::none()
+            }
+
+            Message::ClearLogs => {
+                self.log_lines.clear();
+                Task::none()
+            }
+
+            Message::DownloadEvent(ev) => {
+                self.handle_download_event(ev);
+                Task::none()
+            }
+            Message::PhaseTick => {
+                self.phase_tick = (self.phase_tick + 1) % 4;
+                Task::none()
             }
         }
     }
 
-    pub fn push_log(&mut self, level: LogLevel, text: impl Into<String>) {
+    pub fn view(&self) -> Element<'_, Message> {
+        let active_jobs = self.jobs.values().filter(|j| !j.finished).count() as u32;
+        let queries: Vec<QueryView> = self
+            .cfg
+            .queries
+            .iter()
+            .map(|q| self.to_query_view(q))
+            .collect();
+        let mut sorted_jobs: Vec<(&u64, &JobState)> = self.jobs.iter().collect();
+        sorted_jobs.sort_by_key(|(id, _)| **id);
+        let jobs: Vec<JobView> = sorted_jobs
+            .iter()
+            .map(|(id, j)| self.to_job_view(**id, j))
+            .collect();
+        let logs: Vec<LogLine> = self.log_lines.iter().cloned().collect();
+
+        let main: Element<Message> = match self.active_tab {
+            Tab::Queue => view::queue::view(
+                queries,
+                jobs,
+                &self.new_query_buf,
+                self.creds_loaded_from_store,
+            ),
+            Tab::Settings => view::settings::view(&self.settings_form),
+            Tab::Log => view::log::view(logs),
+        };
+
+        let layout = row![view::sidebar::view(self.active_tab, active_jobs), main];
+
+        container(layout)
+            .style(theme::page_bg)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn schedule_save(&mut self) -> Task<Message> {
+        self.save_token = self.save_token.wrapping_add(1);
+        let token = self.save_token;
+        Task::perform(
+            async move {
+                tokio::time::sleep(SAVE_DEBOUNCE).await;
+                token
+            },
+            Message::ConfigSaveTick,
+        )
+    }
+
+    fn persist_config_now(&mut self) {
+        if let Err(e) = self.cfg.save(&self.cfg_path) {
+            self.push_log(LogLevel::Error, format!("config save failed: {e}"));
+        }
+    }
+
+    fn push_log(&mut self, level: LogLevel, text: impl Into<String>) {
         if self.log_lines.len() >= LOG_LINE_CAP {
             self.log_lines.pop_front();
         }
@@ -124,31 +566,6 @@ impl Controller {
             level,
             text: text.into(),
         });
-    }
-
-    pub fn save_config_if_dirty(&mut self) {
-        if !self.cfg_dirty {
-            return;
-        }
-        match self.cfg.save(&self.cfg_path) {
-            Ok(()) => self.cfg_dirty = false,
-            Err(e) => self.push_log(LogLevel::Error, format!("config save failed: {e}")),
-        }
-    }
-
-    fn persist_logged_in(&mut self) {
-        match crate::credentials::save(&self.creds) {
-            Ok(()) => {
-                self.creds_dirty = false;
-                self.creds_loaded_from_store = true;
-                self.creds_store_error = None;
-                self.push_log(LogLevel::Info, "logged in, credentials saved to OS keyring");
-            }
-            Err(e) => {
-                self.creds_store_error = Some(format!("{e}"));
-                self.push_log(LogLevel::Error, format!("credentials save failed: {e}"));
-            }
-        }
     }
 
     fn start_job(&mut self, tags: String) {
@@ -161,11 +578,9 @@ impl Controller {
             return;
         }
 
-        // Persist as a saved query if not already in the list.
         if !self.cfg.queries.iter().any(|q| q.tags == tags) {
             self.cfg.new_query(tags.clone());
-            self.cfg_dirty = true;
-            self.save_config_if_dirty();
+            self.persist_config_now();
         }
 
         let already_running = self.jobs.values().any(|j| !j.finished && j.tags == tags);
@@ -175,8 +590,6 @@ impl Controller {
             return;
         }
 
-        // Serialize: shared 2 RPS API limiter makes parallel jobs pointless,
-        // so wait for the currently active job before spawning the next one.
         let any_active = self.jobs.values().any(|j| !j.finished);
         if any_active {
             self.pending_tags.push_back(tags.clone());
@@ -190,28 +603,24 @@ impl Controller {
     fn spawn_now(&mut self, tags: String) {
         let cfg = self.cfg.clone();
         let creds = Some(self.creds.clone());
-        match self.manager.spawn_job(tags.clone(), cfg, creds) {
-            Ok(handle) => {
-                let job_id = handle.job_id;
-                self.jobs.insert(
-                    job_id,
-                    JobState {
-                        tags,
-                        phase: JobPhase::Starting,
-                        phase_before_pause: None,
-                        pages_scanned: 0,
-                        total: 0,
-                        done: 0,
-                        failed: 0,
-                        current_file: None,
-                        bytes_per_sec: 0,
-                        handle: Some(handle),
-                        finished: false,
-                    },
-                );
-            }
-            Err(e) => self.push_log(LogLevel::Error, format!("spawn job: {e}")),
-        }
+        let handle = self.manager.spawn_job(tags.clone(), cfg, creds);
+        let job_id = handle.job_id;
+        self.jobs.insert(
+            job_id,
+            JobState {
+                tags,
+                phase: JobPhase::Starting,
+                phase_before_pause: None,
+                pages_scanned: 0,
+                total: 0,
+                done: 0,
+                failed: 0,
+                current_file: None,
+                bytes_per_sec: 0,
+                handle: Some(handle),
+                finished: false,
+            },
+        );
     }
 
     fn drain_pending(&mut self) {
@@ -224,7 +633,7 @@ impl Controller {
         }
     }
 
-    fn handle_event(&mut self, ev: DownloadEvent) {
+    fn handle_download_event(&mut self, ev: DownloadEvent) {
         match ev {
             DownloadEvent::JobStarted { job_id, tags } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
@@ -309,7 +718,7 @@ impl Controller {
                     j.finished = true;
                     j.handle = None;
                 }
-                self.push_log(LogLevel::Warn, "cancelled".to_string());
+                self.push_log(LogLevel::Warn, "cancelled");
                 self.drain_pending();
             }
             DownloadEvent::JobPaused { job_id } => {
@@ -319,7 +728,7 @@ impl Controller {
                     j.phase_before_pause = Some(j.phase);
                     j.phase = JobPhase::Paused;
                 }
-                self.push_log(LogLevel::Info, "paused".to_string());
+                self.push_log(LogLevel::Info, "paused");
             }
             DownloadEvent::JobResumed { job_id } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
@@ -327,7 +736,7 @@ impl Controller {
                     j.current_file = None;
                     j.bytes_per_sec = 0;
                 }
-                self.push_log(LogLevel::Info, "resumed".to_string());
+                self.push_log(LogLevel::Info, "resumed");
             }
             DownloadEvent::JobError { job_id, error } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
@@ -341,129 +750,57 @@ impl Controller {
         }
     }
 
-    fn sync_settings_from_ui(&mut self, ui: &AppWindow) {
-        let s = ui.get_settings();
-        let new_username = s.username.to_string();
-        let new_api_key = s.api_key.to_string();
-        if new_username != self.creds.username || new_api_key != self.creds.api_key {
-            self.creds.username = new_username;
-            self.creds.api_key = new_api_key;
-            self.creds_dirty = true;
+    fn to_query_view(&self, q: &TagQuery) -> QueryView {
+        let st = self.state_store.get(&q.tags);
+        QueryView {
+            id: q.id,
+            tags: q.tags.clone(),
+            failed_count: st.failed.len(),
+            running: self.jobs.values().any(|j| !j.finished && j.tags == q.tags),
+            queued: self.pending_tags.iter().any(|t| t == &q.tags),
         }
-        let new_site = match s.site {
-            0 => Site::E621,
-            _ => Site::E926,
+    }
+
+    fn to_job_view(&self, id: u64, j: &JobState) -> JobView {
+        let (phase_label, color_idx) = match j.phase {
+            JobPhase::Starting => ("starting", 0),
+            JobPhase::Discovering => ("discovering", 1),
+            JobPhase::Downloading => ("downloading", 1),
+            JobPhase::Paused => ("paused", 3),
+            JobPhase::Finished => ("done", 2),
+            JobPhase::Cancelled => ("cancelled", 3),
+            JobPhase::Errored => ("error", 4),
         };
-        if new_site != self.cfg.site {
-            self.cfg.site = new_site;
-            self.cfg_dirty = true;
-        }
-        let new_dir = PathBuf::from(s.download_dir.to_string());
-        if new_dir != self.cfg.download_dir {
-            self.cfg.download_dir = new_dir;
-            self.cfg_dirty = true;
-        }
-        let new_rating = RatingFilter {
-            safe: s.rating_safe,
-            questionable: s.rating_questionable,
-            explicit: s.rating_explicit,
-        };
-        if (
-            new_rating.safe,
-            new_rating.questionable,
-            new_rating.explicit,
-        ) != (
-            self.cfg.rating.safe,
-            self.cfg.rating.questionable,
-            self.cfg.rating.explicit,
+        let dots = if matches!(
+            j.phase,
+            JobPhase::Starting | JobPhase::Discovering | JobPhase::Downloading
         ) {
-            self.cfg.rating = new_rating;
-            self.cfg_dirty = true;
-        }
-        let new_skip = MediaSkip {
-            video: s.skip_video,
-            flash: s.skip_flash,
-            animation: s.skip_animation,
+            ".".repeat(self.phase_tick as usize)
+        } else {
+            String::new()
         };
-        if (new_skip.video, new_skip.flash, new_skip.animation)
-            != (
-                self.cfg.media_skip.video,
-                self.cfg.media_skip.flash,
-                self.cfg.media_skip.animation,
-            )
-        {
-            self.cfg.media_skip = new_skip;
-            self.cfg_dirty = true;
+        let progress = match j.phase {
+            JobPhase::Starting | JobPhase::Discovering => 0.0,
+            JobPhase::Downloading | JobPhase::Paused if j.total > 0 => {
+                (j.done as f32 / j.total as f32).clamp(0.0, 1.0)
+            }
+            JobPhase::Downloading | JobPhase::Paused => 0.0,
+            JobPhase::Finished | JobPhase::Cancelled | JobPhase::Errored => 1.0,
+        };
+        JobView {
+            id,
+            tags: j.tags.clone(),
+            phase_color_idx: color_idx,
+            phase_label: phase_label.to_string(),
+            phase_dots: dots,
+            stats_label: format_stats(j),
+            progress,
+            current_file: j.current_file.clone().unwrap_or_default(),
+            finished: j.finished,
+            paused: j.phase == JobPhase::Paused,
         }
-        let new_blacklist: Vec<String> = s
-            .blacklist
-            .to_string()
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect();
-        if new_blacklist != self.cfg.blacklist {
-            self.cfg.blacklist = new_blacklist;
-            self.cfg_dirty = true;
-        }
     }
-}
 
-// ---- UI push helpers (separate fns so they can borrow &Controller + &AppWindow) ----
-
-fn to_tag_query_data(q: &crate::config::TagQuery, ctrl: &Controller) -> TagQueryData {
-    let st = ctrl.state_store.get(&q.tags);
-    TagQueryData {
-        id: q.id as i32,
-        tags: q.tags.clone().into(),
-        failed_count: st.failed.len() as i32,
-        running: ctrl.jobs.values().any(|j| !j.finished && j.tags == q.tags),
-        queued: ctrl.pending_tags.iter().any(|t| t == &q.tags),
-    }
-}
-
-fn to_job_data(id: u64, j: &JobState) -> JobData {
-    let (phase_label, color_idx) = match j.phase {
-        JobPhase::Starting => ("starting", 0),
-        JobPhase::Discovering => ("discovering", 1),
-        JobPhase::Downloading => ("downloading", 1),
-        JobPhase::Paused => ("paused", 3),
-        JobPhase::Finished => ("done", 2),
-        JobPhase::Cancelled => ("cancelled", 3),
-        JobPhase::Errored => ("error", 4),
-    };
-    let progress = match j.phase {
-        JobPhase::Starting | JobPhase::Discovering => 0.0,
-        JobPhase::Downloading | JobPhase::Paused if j.total > 0 => {
-            (j.done as f32 / j.total as f32).clamp(0.0, 1.0)
-        }
-        JobPhase::Downloading | JobPhase::Paused => 0.0,
-        JobPhase::Finished | JobPhase::Cancelled | JobPhase::Errored => 1.0,
-    };
-    JobData {
-        id: id as i32,
-        tags: j.tags.clone().into(),
-        phase: phase_to_int(j.phase),
-        phase_label: phase_label.into(),
-        phase_color_idx: color_idx,
-        stats_label: format_stats(j).into(),
-        progress,
-        current_file: j.current_file.clone().unwrap_or_default().into(),
-        finished: j.finished,
-        paused: j.phase == JobPhase::Paused,
-    }
-}
-
-fn phase_to_int(p: JobPhase) -> i32 {
-    match p {
-        JobPhase::Starting => 0,
-        JobPhase::Discovering => 1,
-        JobPhase::Downloading => 2,
-        JobPhase::Paused => 3,
-        JobPhase::Finished => 4,
-        JobPhase::Cancelled => 5,
-        JobPhase::Errored => 6,
-    }
 }
 
 fn format_stats(j: &JobState) -> String {
@@ -503,349 +840,26 @@ fn format_bps(bps: u64) -> String {
     }
 }
 
-fn push_queries(ctrl: &Controller, ui: &AppWindow) {
-    let items: Vec<TagQueryData> = ctrl
-        .cfg
-        .queries
-        .iter()
-        .map(|q| to_tag_query_data(q, ctrl))
-        .collect();
-    let model = Rc::new(slint::VecModel::from(items));
-    ui.set_queries(slint::ModelRc::from(model));
-}
-
-fn push_jobs(ctrl: &Controller, ui: &AppWindow) {
-    let mut sorted: Vec<(u64, &JobState)> = ctrl.jobs.iter().map(|(k, v)| (*k, v)).collect();
-    sorted.sort_by_key(|(id, _)| *id);
-    let items: Vec<JobData> = sorted.iter().map(|(id, j)| to_job_data(*id, j)).collect();
-    let model = Rc::new(slint::VecModel::from(items));
-    ui.set_jobs(slint::ModelRc::from(model));
-
-    let active = ctrl.jobs.values().filter(|j| !j.finished).count() as i32;
-    ui.set_active_jobs(active);
-}
-
-fn push_logs(ctrl: &Controller, ui: &AppWindow) {
-    let items: Vec<LogEntry> = ctrl
-        .log_lines
-        .iter()
-        .map(|l| LogEntry {
-            level: match l.level {
-                LogLevel::Info => 0,
-                LogLevel::Warn => 1,
-                LogLevel::Error => 2,
-            },
-            text: l.text.clone().into(),
-        })
-        .collect();
-    let model = Rc::new(slint::VecModel::from(items));
-    ui.set_logs(slint::ModelRc::from(model));
-}
-
-fn push_settings(ctrl: &Controller, ui: &AppWindow) {
-    // Preserve the transient "checking" flag — it's driven by the login callback,
-    // not by controller state, so we read the current value off the UI.
-    let checking = ui.get_settings().creds_checking;
-    ui.set_settings(SettingsData {
-        username: ctrl.creds.username.clone().into(),
-        api_key: ctrl.creds.api_key.clone().into(),
-        creds_dirty: ctrl.creds_dirty,
-        creds_loaded: ctrl.creds_loaded_from_store,
-        creds_checking: checking,
-        creds_error: ctrl.creds_store_error.clone().unwrap_or_default().into(),
-        site: match ctrl.cfg.site {
-            Site::E621 => 0,
-            Site::E926 => 1,
-        },
-        download_dir: ctrl.cfg.download_dir.display().to_string().into(),
-        rating_safe: ctrl.cfg.rating.safe,
-        rating_questionable: ctrl.cfg.rating.questionable,
-        rating_explicit: ctrl.cfg.rating.explicit,
-        skip_video: ctrl.cfg.media_skip.video,
-        skip_flash: ctrl.cfg.media_skip.flash,
-        skip_animation: ctrl.cfg.media_skip.animation,
-        blacklist: ctrl.cfg.blacklist.join("\n").into(),
-    });
-    ui.set_logged_in(ctrl.creds_loaded_from_store);
-}
-
-fn push_all(ctrl: &Controller, ui: &AppWindow) {
-    push_queries(ctrl, ui);
-    push_jobs(ctrl, ui);
-    push_logs(ctrl, ui);
-    push_settings(ctrl, ui);
-}
-
-// ---- Binding ----
-
-pub fn bind(
-    ui: &AppWindow,
-    controller: Arc<Mutex<Controller>>,
-    rt: Handle,
-    mut events_rx: mpsc::UnboundedReceiver<DownloadEvent>,
-) {
-    {
-        let c = controller.lock();
-        push_all(&c, ui);
-    }
-
-    // remove-query
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        ui.on_remove_query(move |id| {
-            if let Some(ui) = ui_weak.upgrade() {
-                let mut c = ctrl.lock();
-                let removed_tags: Option<String> = c
-                    .cfg
-                    .queries
-                    .iter()
-                    .find(|q| q.id == id as u64)
-                    .map(|q| q.tags.clone());
-                c.cfg.remove_query(id as u64);
-                c.cfg_dirty = true;
-                c.save_config_if_dirty();
-                if let Some(tags) = removed_tags {
-                    c.pending_tags.retain(|t| t != &tags);
-                }
-                push_queries(&c, &ui);
-            }
-        });
-    }
-
-    // cancel-query — abort whichever stage of this query is active.
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        ui.on_cancel_query(move |id| {
-            if let Some(ui) = ui_weak.upgrade() {
-                let mut c = ctrl.lock();
-                let Some(tags) = c
-                    .cfg
-                    .queries
-                    .iter()
-                    .find(|q| q.id == id as u64)
-                    .map(|q| q.tags.clone())
-                else {
-                    return;
-                };
-                let was_pending = c.pending_tags.iter().any(|t| t == &tags);
-                c.pending_tags.retain(|t| t != &tags);
-                let active = c
-                    .jobs
-                    .values()
-                    .find(|j| !j.finished && j.tags == tags)
-                    .and_then(|j| j.handle.as_ref().map(|h| (j.tags.clone(), h.job_id)));
-                if let Some((_, job_id)) = active {
-                    if let Some(j) = c.jobs.get(&job_id)
-                        && let Some(h) = j.handle.as_ref()
-                    {
-                        h.cancel();
-                    }
-                    c.push_log(LogLevel::Info, format!("cancel requested: {tags}"));
-                } else if was_pending {
-                    c.push_log(LogLevel::Info, format!("removed from queue: {tags}"));
-                }
-                push_queries(&c, &ui);
-                push_jobs(&c, &ui);
-                push_logs(&c, &ui);
-            }
-        });
-    }
-
-    // start-job
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        ui.on_start_job(move |tags| {
-            if let Some(ui) = ui_weak.upgrade() {
-                let mut c = ctrl.lock();
-                c.start_job(tags.to_string());
-                push_queries(&c, &ui);
-                push_jobs(&c, &ui);
-                push_logs(&c, &ui);
-            }
-        });
-    }
-
-    // toggle-pause-job
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        ui.on_toggle_pause_job(move |id| {
-            if let Some(ui) = ui_weak.upgrade() {
-                let mut c = ctrl.lock();
-                if let Some(j) = c.jobs.get_mut(&(id as u64))
-                    && let Some(h) = &j.handle
-                {
-                    if h.is_paused() {
-                        h.resume();
-                        j.phase = j.phase_before_pause.take().unwrap_or(JobPhase::Downloading);
-                        j.current_file = None;
-                        j.bytes_per_sec = 0;
-                    } else if j.phase != JobPhase::Paused {
-                        h.pause();
-                        j.phase_before_pause = Some(j.phase);
-                        j.phase = JobPhase::Paused;
-                    }
-                    push_jobs(&c, &ui);
-                }
-            }
-        });
-    }
-
-    // login — verify credentials with e621, then persist on success
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        let rt_for_login = rt.clone();
-        ui.on_login(move || {
-            let Some(ui) = ui_weak.upgrade() else {
-                return;
-            };
-            let (creds, site) = {
-                let mut c = ctrl.lock();
-                c.sync_settings_from_ui(&ui);
-                (c.creds.clone(), c.cfg.site)
-            };
-            if creds.is_empty() {
-                return;
-            }
-
-            // Flip the UI into "checking" state.
-            let mut s = ui.get_settings();
-            s.creds_checking = true;
-            s.creds_error = "".into();
-            ui.set_settings(s);
-
-            let ui_weak_inner = ui.as_weak();
-            let ctrl_inner = ctrl.clone();
-            rt_for_login.spawn(async move {
-                let result: Result<(), String> = async {
-                    let client = Client::new(site, Some(creds.clone()))
-                        .await
-                        .map_err(|e| format!("{e}"))?;
-                    client.verify_login().await.map_err(|e| format!("{e:#}"))?;
-                    Ok(())
-                }
-                .await;
-
-                let _ = slint::invoke_from_event_loop(move || {
-                    let Some(ui) = ui_weak_inner.upgrade() else {
-                        return;
-                    };
-                    let mut c = ctrl_inner.lock();
-                    match result {
-                        Ok(()) => {
-                            c.persist_logged_in();
-                        }
-                        Err(err) => {
-                            c.creds_loaded_from_store = false;
-                            c.creds_store_error = Some(err.clone());
-                            c.push_log(LogLevel::Error, format!("login failed: {err}"));
-                        }
-                    }
-                    // Clear checking flag, then push full settings.
-                    let mut s = ui.get_settings();
-                    s.creds_checking = false;
-                    ui.set_settings(s);
-                    push_settings(&c, &ui);
-                    push_queries(&c, &ui);
-                    push_logs(&c, &ui);
-                });
-            });
-        });
-    }
-
-    // logout — drop credentials and wipe keyring
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        ui.on_logout(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                let mut c = ctrl.lock();
-                c.creds = Credentials::default();
-                c.creds_dirty = false;
-                c.creds_loaded_from_store = false;
-                c.creds_store_error = None;
-                if let Err(e) = crate::credentials::clear() {
-                    c.push_log(LogLevel::Warn, format!("logout: {e}"));
-                } else {
-                    c.push_log(LogLevel::Info, "logged out");
-                }
-                push_settings(&c, &ui);
-                push_queries(&c, &ui);
-                push_logs(&c, &ui);
-            }
-        });
-    }
-
-    // pick-folder
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        ui.on_pick_folder(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                let start = ctrl.lock().cfg.download_dir.clone();
-                if let Some(path) = rfd::FileDialog::new()
-                    .set_title("Choose download folder")
-                    .set_directory(&start)
-                    .pick_folder()
-                {
-                    let mut c = ctrl.lock();
-                    c.cfg.download_dir = path;
-                    c.cfg_dirty = true;
-                    c.save_config_if_dirty();
-                    push_settings(&c, &ui);
-                }
-            }
-        });
-    }
-
-    // settings-changed: auto-commit config-side fields
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        ui.on_settings_changed(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                let mut c = ctrl.lock();
-                c.sync_settings_from_ui(&ui);
-                c.save_config_if_dirty();
-            }
-        });
-    }
-
-    // clear-logs
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        ui.on_clear_logs(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                let mut c = ctrl.lock();
-                c.log_lines.clear();
-                push_logs(&c, &ui);
-            }
-        });
-    }
-
-    // Tokio → Slint event forwarder
-    {
-        let ui_weak = ui.as_weak();
-        let ctrl = controller.clone();
-        rt.spawn(async move {
-            while let Some(ev) = events_rx.recv().await {
-                let ui_weak = ui_weak.clone();
-                let ctrl = ctrl.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        let mut c = ctrl.lock();
-                        c.handle_event(ev);
-                        push_queries(&c, &ui);
-                        push_jobs(&c, &ui);
-                        push_logs(&c, &ui);
-                    }
-                });
-            }
-        });
+fn build_settings_form(
+    cfg: &Config,
+    creds: &Credentials,
+    creds_loaded: bool,
+    creds_err: Option<&str>,
+) -> SettingsForm {
+    SettingsForm {
+        username: creds.username.clone(),
+        api_key: creds.api_key.clone(),
+        creds_loaded,
+        creds_checking: false,
+        creds_error: creds_err.unwrap_or_default().to_string(),
+        site: SiteOption::from_site(cfg.site),
+        download_dir: cfg.download_dir.display().to_string(),
+        rating_safe: cfg.rating.safe,
+        rating_questionable: cfg.rating.questionable,
+        rating_explicit: cfg.rating.explicit,
+        skip_video: cfg.media_skip.video,
+        skip_flash: cfg.media_skip.flash,
+        skip_animation: cfg.media_skip.animation,
+        blacklist: cfg.blacklist.join("\n"),
     }
 }

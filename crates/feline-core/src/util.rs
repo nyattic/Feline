@@ -15,7 +15,6 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Where `config.json` and `state.json` live.
 #[cfg(target_os = "macos")]
 pub fn config_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Feline")
@@ -30,7 +29,6 @@ pub fn state_dir() -> PathBuf {
     config_dir()
 }
 
-/// Where rotated log files are written.
 #[cfg(target_os = "macos")]
 pub fn log_dir() -> PathBuf {
     home_dir().join("Library/Logs/Feline")
@@ -41,7 +39,6 @@ pub fn log_dir() -> PathBuf {
     exe_dir().join("log")
 }
 
-/// Default download destination shown to first-time users.
 #[cfg(target_os = "macos")]
 pub fn default_download_dir() -> PathBuf {
     home_dir().join("Downloads/Feline")

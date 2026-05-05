@@ -33,8 +33,6 @@ impl RatingFilter {
         }
     }
 
-    /// Returns e621 rating filter tokens to append to a search query.
-    /// If all three are enabled or all three are disabled, no filter is applied.
     pub fn as_query_fragment(&self) -> Option<String> {
         let selected: Vec<&'static str> = [
             self.safe.then_some("s"),
@@ -57,7 +55,6 @@ impl RatingFilter {
     }
 }
 
-/// Optional `-type:...` filters injected into every search.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct MediaSkip {
     #[serde(default)]
@@ -69,7 +66,6 @@ pub struct MediaSkip {
 }
 
 impl MediaSkip {
-    /// Returns the negated `-type:` tokens for the enabled skip flags.
     pub fn as_query_tokens(&self) -> Vec<&'static str> {
         let mut out = Vec::new();
         if self.video {
