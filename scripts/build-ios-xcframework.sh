@@ -38,7 +38,7 @@ fi
 
 # 3. Generate Swift bindings + module map
 mkdir -p "$SWIFT_OUT"
-cargo run --release --bin uniffi-bindgen-feline -- \
+cargo run --release -p $CRATE --bin uniffi-bindgen-feline -- \
     generate --library "target/aarch64-apple-ios/release/$LIB_NAME" \
     --language swift --out-dir "$SWIFT_OUT"
 
