@@ -1463,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "feline-core"
-version = "0.5.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "governor",
@@ -1481,7 +1481,7 @@ dependencies = [
 
 [[package]]
 name = "feline-desktop"
-version = "0.5.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "backon",
