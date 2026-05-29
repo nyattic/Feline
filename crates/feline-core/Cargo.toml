@@ -21,13 +21,14 @@ ffi = []
 [dependencies]
 anyhow = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 reqwest = { workspace = true }
-rustls = { workspace = true }
-rustls-pki-types = { workspace = true }
-rustls-platform-verifier = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 governor = { workspace = true }
 tracing = { workspace = true }
 uniffi = { version = "0.31", features = ["tokio", "cli"] }
+boringtun = { workspace = true }
+smoltcp = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }

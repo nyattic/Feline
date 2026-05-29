@@ -3,7 +3,6 @@ use reqwest::header::{ACCEPT, HeaderMap, HeaderValue, USER_AGENT};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::ech::configure_ech_client;
 use super::rate_limit::{ApiLimiter, new_api_limiter};
 use super::types::{Post, PostsResponse};
 use crate::config::{MediaSkip, RatingFilter, Site};
@@ -29,14 +28,14 @@ pub struct Client {
 
 impl Client {
     pub async fn new(site: Site, creds: Option<Credentials>) -> Result<Self> {
-        Self::with_limiter(site, creds, new_api_limiter(), false).await
+        Self::with_limiter(site, creds, new_api_limiter(), None).await
     }
 
     pub async fn with_limiter(
         site: Site,
         creds: Option<Credentials>,
         limiter: Arc<ApiLimiter>,
-        fail_closed_ech: bool,
+        proxy_url: Option<String>,
     ) -> Result<Self> {
         let ua = build_user_agent(creds.as_ref());
         let mut default_headers = HeaderMap::new();
@@ -44,21 +43,9 @@ impl Client {
         default_headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
 
         let download_headers = default_headers.clone();
-        let base_builder = reqwest::Client::builder()
-            .default_headers(default_headers)
-            .timeout(Duration::from_secs(60))
-            .connect_timeout(Duration::from_secs(15));
-
-        let api_http = configure_ech_client(base_builder, site.host(), fail_closed_ech)
-            .await?
-            .build()
+        let api_http = build_http(default_headers, proxy_url.as_deref())
             .context("build API reqwest client")?;
-
-        let download_http = reqwest::Client::builder()
-            .default_headers(download_headers)
-            .timeout(Duration::from_secs(60))
-            .connect_timeout(Duration::from_secs(15))
-            .build()
+        let download_http = build_http(download_headers, proxy_url.as_deref())
             .context("build download reqwest client")?;
 
         Ok(Self {
@@ -200,6 +187,50 @@ impl Client {
             body: resp.bytes().await?.to_vec(),
         })
     }
+
+    pub async fn fetch_media(&self, url: &str) -> Result<RawResponse> {
+        let parsed = reqwest::Url::parse(url).context("invalid media URL")?;
+        if parsed.scheme() != "https" {
+            anyhow::bail!("media URL must use https");
+        }
+        let host = parsed.host_str().unwrap_or_default();
+        if !is_allowed_media_host(host) {
+            anyhow::bail!("media host not allowed: {host}");
+        }
+
+        let mut req = self.download_http.get(parsed);
+        if let Some(creds) = &self.creds
+            && !creds.is_empty()
+        {
+            req = req.basic_auth(&creds.username, Some(&creds.api_key));
+        }
+
+        let resp = req.send().await.context("send media request")?;
+        Ok(RawResponse {
+            status: resp.status().as_u16(),
+            body: resp.bytes().await?.to_vec(),
+        })
+    }
+}
+
+fn build_http(headers: HeaderMap, proxy_url: Option<&str>) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(15));
+    if let Some(url) = proxy_url {
+        let proxy = reqwest::Proxy::all(url).context("configure SOCKS5 proxy")?;
+        builder = builder.proxy(proxy);
+    }
+    builder.build().context("build reqwest client")
+}
+
+fn is_allowed_media_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.');
+    host == "e621.net"
+        || host == "e926.net"
+        || host.ends_with(".e621.net")
+        || host.ends_with(".e926.net")
 }
 
 pub fn build_user_agent(creds: Option<&Credentials>) -> String {

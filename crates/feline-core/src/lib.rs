@@ -4,6 +4,7 @@ pub mod config;
 pub mod credentials;
 pub mod e621;
 pub mod util;
+pub mod vpn;
 mod ffi;
 
 pub use credentials::Credentials;
