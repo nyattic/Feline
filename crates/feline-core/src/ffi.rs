@@ -105,6 +105,13 @@ impl E621Core {
         let resp = self.inner.fetch_media(&url).await.map_err(FfiError::from)?;
         Ok(FfiResponse { status: resp.status, body: resp.body })
     }
+
+    pub async fn download_to_file(&self, url: String, dest_path: String) -> Result<u16, FfiError> {
+        self.inner
+            .download_to_file(&url, &dest_path)
+            .await
+            .map_err(FfiError::from)
+    }
 }
 
 #[derive(uniffi::Object)]

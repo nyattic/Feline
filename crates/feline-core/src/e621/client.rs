@@ -211,6 +211,41 @@ impl Client {
             body: resp.bytes().await?.to_vec(),
         })
     }
+
+    pub async fn download_to_file(&self, url: &str, dest_path: &str) -> Result<u16> {
+        use tokio::io::AsyncWriteExt;
+
+        let parsed = reqwest::Url::parse(url).context("invalid media URL")?;
+        if parsed.scheme() != "https" {
+            anyhow::bail!("media URL must use https");
+        }
+        let host = parsed.host_str().unwrap_or_default();
+        if !is_allowed_media_host(host) {
+            anyhow::bail!("media host not allowed: {host}");
+        }
+
+        let mut req = self.download_http.get(parsed);
+        if let Some(creds) = &self.creds
+            && !creds.is_empty()
+        {
+            req = req.basic_auth(&creds.username, Some(&creds.api_key));
+        }
+
+        let mut resp = req.send().await.context("send media request")?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Ok(status);
+        }
+
+        let mut file = tokio::fs::File::create(dest_path)
+            .await
+            .context("create destination file")?;
+        while let Some(chunk) = resp.chunk().await.context("read media chunk")? {
+            file.write_all(&chunk).await.context("write media chunk")?;
+        }
+        file.flush().await.context("flush media file")?;
+        Ok(status)
+    }
 }
 
 fn build_http(headers: HeaderMap, proxy_url: Option<&str>) -> Result<reqwest::Client> {
