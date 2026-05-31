@@ -12,6 +12,10 @@ cd "$ROOT"
 # Match the iOS deployment target consumed by the embedding Xcode project.
 # Override with IPHONEOS_DEPLOYMENT_TARGET=... when invoking this script.
 export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-26.2}"
+# BoringSSL (pulled in by wreq) is built through CMake, which otherwise pins its
+# objects to the SDK's minimum (e.g. 26.5) and floods the app link with
+# "built for newer iOS version" warnings. Force it to the same target.
+export CMAKE_OSX_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET"
 
 # 1. Build static libs for each iOS target
 cargo build --release --target aarch64-apple-ios          -p $CRATE
