@@ -7,7 +7,7 @@ use crate::view::widgets::{
     caption, card, field_label, link_button, page_title, primary_button, section_title, switch,
 };
 
-const SITE_OPTIONS: [SiteOption; 2] = [SiteOption::E621, SiteOption::E926];
+const SITE_OPTIONS: [SiteOption; 3] = [SiteOption::E621, SiteOption::E926, SiteOption::E6ai];
 
 pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
     let header = page_title("Settings", "Configure credentials, download path, and filters.");

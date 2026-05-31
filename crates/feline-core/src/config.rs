@@ -1,19 +1,73 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Site {
     #[default]
     E621,
     E926,
+    E6ai,
 }
+
+pub const SITES: [Site; 3] = [Site::E621, Site::E926, Site::E6ai];
 
 impl Site {
     pub fn host(&self) -> &'static str {
         match self {
             Site::E621 => "e621.net",
             Site::E926 => "e926.net",
+            Site::E6ai => "e6ai.net",
         }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Site::E621 => "e621",
+            Site::E926 => "e926",
+            Site::E6ai => "e6ai",
+        }
+    }
+
+    pub fn media_hosts(&self) -> &'static [&'static str] {
+        match self {
+            Site::E621 | Site::E926 => &[
+                "e621.net",
+                "static1.e621.net",
+                "static2.e621.net",
+                "e926.net",
+                "static1.e926.net",
+                "static2.e926.net",
+            ],
+            Site::E6ai => &["e6ai.net", "static1.e6ai.net", "static2.e6ai.net"],
+        }
+    }
+
+    pub fn credential_domains(&self) -> &'static [&'static str] {
+        match self {
+            Site::E621 | Site::E926 => &["e621.net", "e926.net"],
+            Site::E6ai => &["e6ai.net"],
+        }
+    }
+
+    pub fn keychain_account(&self) -> &'static str {
+        match self {
+            Site::E621 | Site::E926 => "e621",
+            Site::E6ai => "e6ai",
+        }
+    }
+
+    pub fn from_media_host(host: &str) -> Option<Site> {
+        let host = host.trim_end_matches('.');
+        for site in SITES {
+            if site
+                .media_hosts()
+                .iter()
+                .any(|h| host == *h || host.ends_with(&format!(".{h}")))
+            {
+                return Some(site);
+            }
+        }
+        None
     }
 }
 

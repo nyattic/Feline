@@ -32,6 +32,7 @@ pub enum Tab {
 pub enum SiteOption {
     E621,
     E926,
+    E6ai,
 }
 
 impl SiteOption {
@@ -39,6 +40,7 @@ impl SiteOption {
         match s {
             Site::E621 => Self::E621,
             Site::E926 => Self::E926,
+            Site::E6ai => Self::E6ai,
         }
     }
 
@@ -46,6 +48,7 @@ impl SiteOption {
         match self {
             Self::E621 => Site::E621,
             Self::E926 => Site::E926,
+            Self::E6ai => Site::E6ai,
         }
     }
 }
@@ -55,6 +58,7 @@ impl std::fmt::Display for SiteOption {
         match self {
             Self::E621 => f.write_str("e621.net (NSFW)"),
             Self::E926 => f.write_str("e926.net (SFW)"),
+            Self::E6ai => f.write_str("e6ai.net (AI)"),
         }
     }
 }

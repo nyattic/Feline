@@ -1,6 +1,7 @@
 pub mod config;
 pub mod device;
 pub mod dns;
+pub mod mullvad;
 pub mod runtime;
 pub mod socks;
 

@@ -2,7 +2,10 @@ use crate::credentials::Credentials;
 use crate::e621::client::Client;
 use crate::e621::rate_limit::new_api_limiter;
 use crate::vpn;
+use crate::vpn::config::IpCidr;
+use crate::vpn::mullvad;
 use crate::Site;
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(uniffi::Record)]
@@ -21,6 +24,7 @@ impl From<FfiCredentials> for Credentials {
 pub enum FfiSite {
     E621,
     E926,
+    E6ai,
 }
 
 impl From<FfiSite> for Site {
@@ -28,6 +32,7 @@ impl From<FfiSite> for Site {
         match s {
             FfiSite::E621 => Site::E621,
             FfiSite::E926 => Site::E926,
+            FfiSite::E6ai => Site::E6ai,
         }
     }
 }
@@ -42,6 +47,68 @@ pub struct FfiResponse {
 pub struct FfiQueryParam {
     pub key: String,
     pub value: String,
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct FfiMullvadProfile {
+    pub account_number: String,
+    pub private_key: String,
+    pub device_id: String,
+    pub device_name: String,
+    pub addresses: Vec<String>,
+    pub country_code: String,
+    pub country_name: String,
+    pub city_code: String,
+    pub city_name: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct FfiMullvadCity {
+    pub code: String,
+    pub name: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct FfiMullvadCountry {
+    pub code: String,
+    pub name: String,
+    pub cities: Vec<FfiMullvadCity>,
+}
+
+fn profile_to_ffi(p: &mullvad::MullvadProfile) -> FfiMullvadProfile {
+    FfiMullvadProfile {
+        account_number: p.account_number.clone(),
+        private_key: p.private_key.clone(),
+        device_id: p.device_id.clone(),
+        device_name: p.device_name.clone(),
+        addresses: p
+            .addresses
+            .iter()
+            .map(|c| format!("{}/{}", c.addr, c.prefix))
+            .collect(),
+        country_code: p.country_code.clone(),
+        country_name: p.country_name.clone(),
+        city_code: p.city_code.clone(),
+        city_name: p.city_name.clone(),
+    }
+}
+
+fn ffi_to_profile(p: FfiMullvadProfile) -> anyhow::Result<mullvad::MullvadProfile> {
+    let mut addresses = Vec::with_capacity(p.addresses.len());
+    for raw in &p.addresses {
+        addresses.push(IpCidr::from_str(raw)?);
+    }
+    Ok(mullvad::MullvadProfile {
+        account_number: p.account_number,
+        private_key: p.private_key,
+        device_id: p.device_id,
+        device_name: p.device_name,
+        addresses,
+        country_code: p.country_code,
+        country_name: p.country_name,
+        city_code: p.city_code,
+        city_name: p.city_name,
+    })
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -75,12 +142,14 @@ impl E621Core {
         site: FfiSite,
         credentials: Option<FfiCredentials>,
         proxy_url: Option<String>,
+        cache_dir: Option<String>,
     ) -> Result<Arc<Self>, FfiError> {
         let creds = credentials.map(Into::into);
         let limiter = new_api_limiter();
-        let client = Client::with_limiter(site.into(), creds, limiter, proxy_url)
+        let mut client = Client::with_limiter(site.into(), creds, limiter, proxy_url)
             .await
             .map_err(FfiError::from)?;
+        client.set_cache_dir(cache_dir.map(std::path::PathBuf::from));
         Ok(Arc::new(Self { inner: client }))
     }
 
@@ -141,6 +210,27 @@ impl FelineVpn {
         Ok(())
     }
 
+    pub async fn enable_mullvad(
+        &self,
+        profile: FfiMullvadProfile,
+        city_code: Option<String>,
+    ) -> Result<(), FfiError> {
+        let profile = ffi_to_profile(profile).map_err(FfiError::from)?;
+        let relays = mullvad::fetch_relays().await.map_err(FfiError::from)?;
+        let chosen = match city_code {
+            Some(code) => relays.choose(&code),
+            None => relays.choose(&profile.city_code).or_else(|| relays.default_choice()),
+        }
+        .ok_or_else(|| FfiError::Network("the selected Mullvad city is unavailable".into()))?;
+        let cfg = mullvad::build_config(&profile, &chosen).map_err(FfiError::from)?;
+        let handle = vpn::VpnHandle::start(cfg).await.map_err(FfiError::from)?;
+        let previous = self.inner.lock().expect("vpn handle poisoned").replace(handle);
+        if let Some(previous) = previous {
+            previous.shutdown().await;
+        }
+        Ok(())
+    }
+
     pub async fn disable(&self) {
         let previous = self.inner.lock().expect("vpn handle poisoned").take();
         if let Some(previous) = previous {
@@ -166,4 +256,75 @@ pub fn validate_wg_config(config_text: String) -> Result<(), FfiError> {
     vpn::parse(&config_text)
         .map(|_| ())
         .map_err(|e| FfiError::InvalidArgument(format!("{e:#}")))
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn mullvad_sign_in(account_number: String) -> Result<FfiMullvadProfile, FfiError> {
+    let account = mullvad::normalize_account(&account_number).map_err(FfiError::from)?;
+    let token = mullvad::fetch_token(&account).await.map_err(FfiError::from)?;
+    let (private_key, public_key) = mullvad::generate_keypair();
+    let device = mullvad::register_device(&token, &public_key)
+        .await
+        .map_err(FfiError::from)?;
+    let relays = mullvad::fetch_relays().await.map_err(FfiError::from)?;
+    let chosen = relays
+        .default_choice()
+        .ok_or_else(|| FfiError::Network("no Mullvad relays are available".into()))?;
+    let profile = mullvad::MullvadProfile {
+        account_number: account,
+        private_key,
+        device_id: device.id,
+        device_name: device.name,
+        addresses: device.addresses,
+        country_code: chosen.country_code,
+        country_name: chosen.country_name,
+        city_code: chosen.city_code,
+        city_name: chosen.city_name,
+    };
+    Ok(profile_to_ffi(&profile))
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn mullvad_locations() -> Result<Vec<FfiMullvadCountry>, FfiError> {
+    let relays = mullvad::fetch_relays().await.map_err(FfiError::from)?;
+    Ok(relays
+        .locations_tree()
+        .into_iter()
+        .map(|c| FfiMullvadCountry {
+            code: c.code,
+            name: c.name,
+            cities: c
+                .cities
+                .into_iter()
+                .map(|ci| FfiMullvadCity {
+                    code: ci.code,
+                    name: ci.name,
+                })
+                .collect(),
+        })
+        .collect())
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn mullvad_sign_out(account_number: String, device_id: String) -> Result<(), FfiError> {
+    let account = mullvad::normalize_account(&account_number).map_err(FfiError::from)?;
+    let token = mullvad::fetch_token(&account).await.map_err(FfiError::from)?;
+    mullvad::delete_device(&token, &device_id)
+        .await
+        .map_err(FfiError::from)
+}
+
+#[uniffi::export]
+pub fn mask_mullvad_account(account_number: String) -> String {
+    mullvad::mask_account(&account_number)
+}
+
+#[uniffi::export]
+pub fn media_cache_size(cache_dir: String) -> u64 {
+    crate::media_cache::size(std::path::Path::new(&cache_dir))
+}
+
+#[uniffi::export]
+pub fn clear_media_cache(cache_dir: String) -> Result<(), FfiError> {
+    crate::media_cache::clear(std::path::Path::new(&cache_dir)).map_err(FfiError::from)
 }

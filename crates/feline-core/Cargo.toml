@@ -23,6 +23,9 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs"] }
 reqwest = { workspace = true }
+wreq = { workspace = true }
+wreq-util = { workspace = true }
+url = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 governor = { workspace = true }
