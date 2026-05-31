@@ -443,18 +443,9 @@ mod tests {
     }
 
     #[test]
-    fn host_accepts_credentials_for_e6ai() {
-        let domains = Site::E6ai.credential_domains();
-        assert!(host_accepts_credentials("e6ai.net", domains));
-        assert!(host_accepts_credentials("static1.e6ai.net", domains));
-        assert!(!host_accepts_credentials("e621.net", domains));
-    }
-
-    #[test]
-    fn allowed_media_hosts_cover_all_sites() {
+    fn allowed_media_hosts_cover_known_sites() {
         assert!(is_allowed_media_host("static1.e621.net"));
         assert!(is_allowed_media_host("static2.e926.net"));
-        assert!(is_allowed_media_host("static1.e6ai.net"));
         assert!(!is_allowed_media_host("example.com"));
         assert!(!is_allowed_media_host("e621.net.evil.com"));
     }

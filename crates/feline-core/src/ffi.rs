@@ -24,7 +24,6 @@ impl From<FfiCredentials> for Credentials {
 pub enum FfiSite {
     E621,
     E926,
-    E6ai,
 }
 
 impl From<FfiSite> for Site {
@@ -32,7 +31,6 @@ impl From<FfiSite> for Site {
         match s {
             FfiSite::E621 => Site::E621,
             FfiSite::E926 => Site::E926,
-            FfiSite::E6ai => Site::E6ai,
         }
     }
 }
