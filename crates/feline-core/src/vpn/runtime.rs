@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant as StdInstant};
 
 use anyhow::{Context, Result, anyhow};
@@ -34,6 +36,7 @@ const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 const DNS_PKT_BUF: usize = 4096;
 const DNS_META_SLOTS: usize = 16;
 const FALLBACK_DNS: Ipv4Addr = Ipv4Addr::new(1, 1, 1, 1);
+const HANDSHAKE_NONE: u64 = u64::MAX;
 
 pub enum EngineCmd {
     OpenTcp {
@@ -63,11 +66,24 @@ pub struct EngineHandle {
     cmd_tx: mpsc::Sender<EngineCmd>,
     shutdown: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
+    handshake_age_ms: Arc<AtomicU64>,
+    started: StdInstant,
 }
 
 impl EngineHandle {
     pub fn cmd_sender(&self) -> mpsc::Sender<EngineCmd> {
         self.cmd_tx.clone()
+    }
+
+    pub fn handshake_age_ms(&self) -> Option<u64> {
+        match self.handshake_age_ms.load(Ordering::Relaxed) {
+            HANDSHAKE_NONE => None,
+            ms => Some(ms),
+        }
+    }
+
+    pub fn age(&self) -> Duration {
+        self.started.elapsed()
     }
 
     pub async fn shutdown(mut self) {
@@ -96,9 +112,13 @@ pub async fn start(cfg: WgConfig) -> Result<EngineHandle> {
     let (cmd_tx, cmd_rx) = mpsc::channel(CHANNEL_DEPTH);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let cmd_tx_clone = cmd_tx.clone();
+    let handshake_age_ms = Arc::new(AtomicU64::new(HANDSHAKE_NONE));
+    let handshake_age_for_task = handshake_age_ms.clone();
 
     let task = tokio::spawn(async move {
-        if let Err(err) = run_engine(prepared, cmd_rx, shutdown_rx, cmd_tx_clone).await {
+        if let Err(err) =
+            run_engine(prepared, cmd_rx, shutdown_rx, cmd_tx_clone, handshake_age_for_task).await
+        {
             tracing::error!(error = %format!("{err:#}"), "vpn engine exited with error");
         }
     });
@@ -107,6 +127,8 @@ pub async fn start(cfg: WgConfig) -> Result<EngineHandle> {
         cmd_tx,
         shutdown: Some(shutdown_tx),
         task: Some(task),
+        handshake_age_ms,
+        started: StdInstant::now(),
     })
 }
 
@@ -196,6 +218,7 @@ async fn run_engine(
     mut cmd_rx: mpsc::Receiver<EngineCmd>,
     mut shutdown_rx: oneshot::Receiver<()>,
     cmd_tx_for_sessions: mpsc::Sender<EngineCmd>,
+    handshake_age_ms: Arc<AtomicU64>,
 ) -> Result<()> {
     let udp = UdpSocket::bind("0.0.0.0:0")
         .await
@@ -350,6 +373,12 @@ async fn run_engine(
 
         sweep_closed(&mut sockets, &mut managed);
         expire_dns(&mut pending_dns);
+
+        let age = match tunn.time_since_last_handshake() {
+            Some(d) => (d.as_millis() as u64).min(HANDSHAKE_NONE - 1),
+            None => HANDSHAKE_NONE,
+        };
+        handshake_age_ms.store(age, Ordering::Relaxed);
     }
 
     Ok(())

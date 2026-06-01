@@ -184,28 +184,23 @@ impl E621Core {
 #[derive(uniffi::Object)]
 pub struct FelineVpn {
     inner: std::sync::Mutex<Option<vpn::VpnHandle>>,
+    last_config: std::sync::Mutex<Option<vpn::WgConfig>>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
 impl FelineVpn {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { inner: std::sync::Mutex::new(None) })
+        Arc::new(Self {
+            inner: std::sync::Mutex::new(None),
+            last_config: std::sync::Mutex::new(None),
+        })
     }
 
     pub async fn enable(&self, config_text: String) -> Result<(), FfiError> {
         let cfg = vpn::parse(&config_text)
             .map_err(|e| FfiError::InvalidArgument(format!("{e:#}")))?;
-        let handle = vpn::VpnHandle::start(cfg).await.map_err(FfiError::from)?;
-        let previous = self
-            .inner
-            .lock()
-            .expect("vpn handle poisoned")
-            .replace(handle);
-        if let Some(previous) = previous {
-            previous.shutdown().await;
-        }
-        Ok(())
+        self.swap_handle(cfg).await
     }
 
     pub async fn enable_mullvad(
@@ -221,6 +216,16 @@ impl FelineVpn {
         }
         .ok_or_else(|| FfiError::Network("the selected Mullvad city is unavailable".into()))?;
         let cfg = mullvad::build_config(&profile, &chosen).map_err(FfiError::from)?;
+        self.swap_handle(cfg).await
+    }
+
+    pub async fn reconnect(&self) -> Result<(), FfiError> {
+        let cfg = self
+            .last_config
+            .lock()
+            .expect("vpn config poisoned")
+            .clone()
+            .ok_or_else(|| FfiError::Network("no VPN configuration to reconnect".into()))?;
         let handle = vpn::VpnHandle::start(cfg).await.map_err(FfiError::from)?;
         let previous = self.inner.lock().expect("vpn handle poisoned").replace(handle);
         if let Some(previous) = previous {
@@ -230,6 +235,7 @@ impl FelineVpn {
     }
 
     pub async fn disable(&self) {
+        *self.last_config.lock().expect("vpn config poisoned") = None;
         let previous = self.inner.lock().expect("vpn handle poisoned").take();
         if let Some(previous) = previous {
             previous.shutdown().await;
@@ -240,12 +246,32 @@ impl FelineVpn {
         self.inner.lock().expect("vpn handle poisoned").is_some()
     }
 
+    pub fn is_healthy(&self) -> bool {
+        self.inner
+            .lock()
+            .expect("vpn handle poisoned")
+            .as_ref()
+            .is_some_and(|h| h.is_healthy())
+    }
+
     pub fn proxy_url(&self) -> Option<String> {
         self.inner
             .lock()
             .expect("vpn handle poisoned")
             .as_ref()
             .and_then(|h| h.proxy_url())
+    }
+}
+
+impl FelineVpn {
+    async fn swap_handle(&self, cfg: vpn::WgConfig) -> Result<(), FfiError> {
+        let handle = vpn::VpnHandle::start(cfg.clone()).await.map_err(FfiError::from)?;
+        *self.last_config.lock().expect("vpn config poisoned") = Some(cfg);
+        let previous = self.inner.lock().expect("vpn handle poisoned").replace(handle);
+        if let Some(previous) = previous {
+            previous.shutdown().await;
+        }
+        Ok(())
     }
 }
 
