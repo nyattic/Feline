@@ -94,6 +94,7 @@ pub struct JobState {
     pub current_file: Option<String>,
     pub bytes_per_sec: u64,
     pub handle: Option<JobHandle>,
+    pub discovering: bool,
     pub finished: bool,
 }
 
@@ -618,6 +619,7 @@ impl App {
                 current_file: None,
                 bytes_per_sec: 0,
                 handle: Some(handle),
+                discovering: true,
                 finished: false,
             },
         );
@@ -647,7 +649,9 @@ impl App {
                 posts_queued,
             } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
-                    j.phase = JobPhase::Discovering;
+                    if j.phase == JobPhase::Starting {
+                        j.phase = JobPhase::Discovering;
+                    }
                     j.pages_scanned = pages_scanned;
                     j.total = posts_queued;
                 }
@@ -659,8 +663,13 @@ impl App {
                 skipped_failed,
             } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
-                    j.phase = JobPhase::Downloading;
+                    j.discovering = false;
                     j.total = total_posts;
+                    if total_posts > 0
+                        && matches!(j.phase, JobPhase::Starting | JobPhase::Discovering)
+                    {
+                        j.phase = JobPhase::Downloading;
+                    }
                 }
                 self.push_log(
                     LogLevel::Info,
@@ -677,6 +686,9 @@ impl App {
                 bytes_per_sec,
             } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
+                    if matches!(j.phase, JobPhase::Starting | JobPhase::Discovering) {
+                        j.phase = JobPhase::Downloading;
+                    }
                     j.done = done;
                     j.failed = failed;
                     j.current_file = current;
@@ -696,6 +708,7 @@ impl App {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
                     j.phase = JobPhase::Finished;
                     j.finished = true;
+                    j.discovering = false;
                     j.done = done;
                     j.failed = failed;
                     j.total = total;
@@ -716,6 +729,7 @@ impl App {
                     j.phase = JobPhase::Cancelled;
                     j.phase_before_pause = None;
                     j.finished = true;
+                    j.discovering = false;
                     j.handle = None;
                 }
                 self.push_log(LogLevel::Warn, "cancelled");
@@ -742,6 +756,7 @@ impl App {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
                     j.phase = JobPhase::Errored;
                     j.finished = true;
+                    j.discovering = false;
                     j.handle = None;
                 }
                 self.push_log(LogLevel::Error, format!("error: {error}"));
@@ -810,7 +825,12 @@ fn format_stats(j: &JobState) -> String {
             format!("{} pages · {} queued", j.pages_scanned, j.total)
         }
         JobPhase::Downloading => {
-            format!("{}/{} · {} failed · {}", j.done, j.total, j.failed, speed)
+            let total = if j.discovering {
+                format!("{}+", j.total)
+            } else {
+                j.total.to_string()
+            };
+            format!("{}/{} · {} failed · {}", j.done, total, j.failed, speed)
         }
         JobPhase::Paused => {
             let was = j.phase_before_pause.unwrap_or(JobPhase::Downloading);

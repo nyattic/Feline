@@ -290,10 +290,21 @@ pub async fn mullvad_sign_in(account_number: String) -> Result<FfiMullvadProfile
     let device = mullvad::register_device(&token, &public_key)
         .await
         .map_err(FfiError::from)?;
-    let relays = mullvad::fetch_relays().await.map_err(FfiError::from)?;
-    let chosen = relays
-        .default_choice()
-        .ok_or_else(|| FfiError::Network("no Mullvad relays are available".into()))?;
+
+    let relays = match mullvad::fetch_relays().await {
+        Ok(relays) => relays,
+        Err(e) => {
+            let _ = mullvad::delete_device(&token, &device.id).await;
+            return Err(FfiError::from(e));
+        }
+    };
+    let chosen = match relays.default_choice() {
+        Some(chosen) => chosen,
+        None => {
+            let _ = mullvad::delete_device(&token, &device.id).await;
+            return Err(FfiError::Network("no Mullvad relays are available".into()));
+        }
+    };
     let profile = mullvad::MullvadProfile {
         account_number: account,
         private_key,

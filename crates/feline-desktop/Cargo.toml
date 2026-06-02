@@ -25,7 +25,8 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "ti
 tokio-stream = { workspace = true, features = ["sync"] }
 futures = "0.3.32"
 parking_lot = "0.12.5"
-reqwest = { workspace = true }
+wreq = { workspace = true }
+url = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }

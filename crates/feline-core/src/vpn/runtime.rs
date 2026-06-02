@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -208,6 +208,7 @@ struct ManagedSocket {
     inbound_tx: mpsc::Sender<Vec<u8>>,
     pending_outbound: std::collections::VecDeque<Vec<u8>>,
     half_close_requested: bool,
+    local_port: u16,
 }
 
 type DnsReplySender = oneshot::Sender<Result<Vec<IpAddr>>>;
@@ -305,8 +306,7 @@ async fn run_engine(
             r = udp.recv(&mut udp_buf) => {
                 match r {
                     Ok(n) => {
-                        let data = udp_buf[..n].to_vec();
-                        handle_udp_in(&mut tunn, &udp, &queues, &data, &mut send_scratch).await;
+                        handle_udp_in(&mut tunn, &udp, &queues, &udp_buf[..n], &mut send_scratch).await;
                     }
                     Err(err) => {
                         tracing::warn!(%err, "vpn UDP recv error");
@@ -399,7 +399,9 @@ fn open_tcp_session(
     socket.set_nagle_enabled(false);
     socket.set_keep_alive(Some(smoltcp::time::Duration::from_secs(30)));
 
-    let local_port = allocate_port(next_port);
+    let in_use: HashSet<u16> = managed.values().map(|m| m.local_port).collect();
+    let local_port = allocate_port(next_port, &in_use)
+        .ok_or_else(|| anyhow!("no free ephemeral port available for new TCP session"))?;
     let local_endpoint = (IpAddress::from(IpAddr::V4(source_ipv4)), local_port);
     let remote_endpoint = (IpAddress::from(dst.ip()), dst.port());
 
@@ -416,6 +418,7 @@ fn open_tcp_session(
             inbound_tx,
             pending_outbound: Default::default(),
             half_close_requested: false,
+            local_port,
         },
     );
 
@@ -426,14 +429,20 @@ fn open_tcp_session(
     })
 }
 
-fn allocate_port(next_port: &mut u16) -> u16 {
-    let port = *next_port;
-    *next_port = if *next_port == EPHEMERAL_PORT_END {
-        EPHEMERAL_PORT_BASE
-    } else {
-        *next_port + 1
-    };
-    port
+fn allocate_port(next_port: &mut u16, in_use: &HashSet<u16>) -> Option<u16> {
+    let span = (EPHEMERAL_PORT_END - EPHEMERAL_PORT_BASE) as u32 + 1;
+    for _ in 0..span {
+        let port = *next_port;
+        *next_port = if *next_port == EPHEMERAL_PORT_END {
+            EPHEMERAL_PORT_BASE
+        } else {
+            *next_port + 1
+        };
+        if !in_use.contains(&port) {
+            return Some(port);
+        }
+    }
+    None
 }
 
 fn pump_sessions(
@@ -516,14 +525,8 @@ async fn handle_udp_in(
     match tunn.decapsulate(None, data, scratch) {
         TunnResult::WriteToNetwork(packet) => {
             let _ = udp.send(packet).await;
-            loop {
-                let mut more = vec![0u8; MAX_PACKET];
-                match tunn.decapsulate(None, &[], &mut more) {
-                    TunnResult::WriteToNetwork(p) => {
-                        let _ = udp.send(p).await;
-                    }
-                    _ => break,
-                }
+            while let TunnResult::WriteToNetwork(p) = tunn.decapsulate(None, &[], scratch) {
+                let _ = udp.send(p).await;
             }
         }
         TunnResult::WriteToTunnelV4(packet, _) | TunnResult::WriteToTunnelV6(packet, _) => {
@@ -665,5 +668,34 @@ fn expire_dns(pending: &mut PendingDns) {
         if let Some((reply, _)) = pending.remove(&id) {
             let _ = reply.send(Err(anyhow!("DNS query {id:#06x} timed out")));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocate_port_skips_ports_in_use() {
+        let mut next = EPHEMERAL_PORT_BASE;
+        let in_use: HashSet<u16> =
+            [EPHEMERAL_PORT_BASE, EPHEMERAL_PORT_BASE + 1].into_iter().collect();
+        let port = allocate_port(&mut next, &in_use).unwrap();
+        assert_eq!(port, EPHEMERAL_PORT_BASE + 2);
+    }
+
+    #[test]
+    fn allocate_port_wraps_around() {
+        let mut next = EPHEMERAL_PORT_END;
+        let empty = HashSet::new();
+        assert_eq!(allocate_port(&mut next, &empty).unwrap(), EPHEMERAL_PORT_END);
+        assert_eq!(allocate_port(&mut next, &empty).unwrap(), EPHEMERAL_PORT_BASE);
+    }
+
+    #[test]
+    fn allocate_port_none_when_exhausted() {
+        let mut next = EPHEMERAL_PORT_BASE;
+        let in_use: HashSet<u16> = (EPHEMERAL_PORT_BASE..=EPHEMERAL_PORT_END).collect();
+        assert!(allocate_port(&mut next, &in_use).is_none());
     }
 }

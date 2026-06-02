@@ -148,7 +148,7 @@ pub fn text_input_style(theme: &Theme, status: text_input::Status) -> text_input
     base.background = Background::Color(palette::SURFACE_CONTAINER_HIGH);
     base.border = Border {
         color: match status {
-            text_input::Status::Focused { .. } => palette::PRIMARY,
+            text_input::Status::Focused => palette::PRIMARY,
             _ => palette::OUTLINE_VARIANT,
         },
         width: 1.0,

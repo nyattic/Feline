@@ -29,7 +29,7 @@ pub struct RawResponse {
 #[derive(Clone)]
 pub struct Client {
     api_http: wreq::Client,
-    download_http: reqwest::Client,
+    download_http: wreq::Client,
     limiter: Arc<ApiLimiter>,
     site: Site,
     creds: Option<Credentials>,
@@ -51,7 +51,7 @@ impl Client {
 
         let api_http = build_wreq(&ua, proxy_url.as_deref()).context("build API wreq client")?;
         let download_http =
-            build_reqwest(&ua, proxy_url.as_deref()).context("build download reqwest client")?;
+            build_download_wreq(&ua, proxy_url.as_deref()).context("build download wreq client")?;
 
         Ok(Self {
             api_http,
@@ -67,7 +67,7 @@ impl Client {
         self.cache_dir = dir;
     }
 
-    pub fn http(&self) -> &reqwest::Client {
+    pub fn http(&self) -> &wreq::Client {
         &self.download_http
     }
 
@@ -277,6 +277,7 @@ impl Client {
     }
 
     pub async fn download_to_file(&self, url: &str, dest_path: &str) -> Result<u16> {
+        use md5::{Digest, Md5};
         use tokio::io::AsyncWriteExt;
 
         let parsed = url::Url::parse(url).context("invalid media URL")?;
@@ -305,9 +306,12 @@ impl Client {
             anyhow::bail!("file is too large to download ({length} bytes)");
         }
 
+        let expected_md5 = expected_md5_from_url(&parsed);
+
         let mut file = tokio::fs::File::create(dest_path)
             .await
             .context("create destination file")?;
+        let mut hasher = expected_md5.as_ref().map(|_| Md5::new());
         let mut total: u64 = 0;
         while let Some(chunk) = resp.chunk().await.context("read media chunk")? {
             total = total.saturating_add(chunk.len() as u64);
@@ -316,10 +320,32 @@ impl Client {
                 let _ = tokio::fs::remove_file(dest_path).await;
                 anyhow::bail!("file exceeds download cap of {MAX_DOWNLOAD_BYTES} bytes; aborted");
             }
+            if let Some(h) = hasher.as_mut() {
+                h.update(&chunk);
+            }
             file.write_all(&chunk).await.context("write media chunk")?;
         }
         file.flush().await.context("flush media file")?;
+        drop(file);
+
+        if let (Some(expected), Some(h)) = (expected_md5, hasher) {
+            let actual = hex::encode(h.finalize());
+            if actual != expected {
+                let _ = tokio::fs::remove_file(dest_path).await;
+                anyhow::bail!("md5 mismatch: expected {expected}, got {actual}");
+            }
+        }
         Ok(status)
+    }
+}
+
+fn expected_md5_from_url(url: &url::Url) -> Option<String> {
+    let last = url.path_segments()?.next_back()?;
+    let stem = last.split('.').next()?;
+    if stem.len() == 32 && stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Some(stem.to_ascii_lowercase())
+    } else {
+        None
     }
 }
 
@@ -343,22 +369,20 @@ fn build_wreq(user_agent: &str, proxy_url: Option<&str>) -> Result<wreq::Client>
     builder.build().context("build wreq client")
 }
 
-fn build_reqwest(user_agent: &str, proxy_url: Option<&str>) -> Result<reqwest::Client> {
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::USER_AGENT,
-        reqwest::header::HeaderValue::from_str(user_agent)?,
-    );
+fn build_download_wreq(user_agent: &str, proxy_url: Option<&str>) -> Result<wreq::Client> {
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_str(user_agent)?);
 
-    let mut builder = reqwest::Client::builder()
+    let mut builder = wreq::Client::builder()
+        .emulation(EMULATION_PROFILE)
         .default_headers(headers)
         .timeout(Duration::from_secs(60))
         .connect_timeout(Duration::from_secs(15));
     if let Some(url) = proxy_url {
-        let proxy = reqwest::Proxy::all(url).context("configure SOCKS5 proxy")?;
+        let proxy = wreq::Proxy::all(url).context("configure SOCKS5 proxy")?;
         builder = builder.proxy(proxy);
     }
-    builder.build().context("build reqwest client")
+    builder.build().context("build download wreq client")
 }
 
 fn host_accepts_credentials(host: &str, domains: &[&str]) -> bool {
@@ -448,6 +472,16 @@ mod tests {
         assert!(is_allowed_media_host("static2.e926.net"));
         assert!(!is_allowed_media_host("example.com"));
         assert!(!is_allowed_media_host("e621.net.evil.com"));
+    }
+
+    #[test]
+    fn expected_md5_is_extracted_from_file_urls() {
+        let md5 = "0123456789abcdef0123456789abcdef";
+        let url = url::Url::parse(&format!("https://static1.e621.net/data/01/23/{md5}.png")).unwrap();
+        assert_eq!(expected_md5_from_url(&url), Some(md5.to_string()));
+
+        let sample = url::Url::parse("https://static1.e621.net/data/sample/01/23/preview.jpg").unwrap();
+        assert_eq!(expected_md5_from_url(&sample), None);
     }
 
     #[test]

@@ -78,13 +78,13 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
         column![
             section_title("Rating filter"),
             caption("If all or none are enabled, no rating filter is applied."),
-            switch("Safe", form.rating_safe, |v| Message::RatingSafe(v)),
-            switch("Questionable", form.rating_questionable, |v| {
-                Message::RatingQuestionable(v)
-            }),
-            switch("Explicit", form.rating_explicit, |v| {
-                Message::RatingExplicit(v)
-            }),
+            switch("Safe", form.rating_safe, Message::RatingSafe),
+            switch(
+                "Questionable",
+                form.rating_questionable,
+                Message::RatingQuestionable,
+            ),
+            switch("Explicit", form.rating_explicit, Message::RatingExplicit),
         ]
         .spacing(10)
         .padding(Padding::from([18u16, 20u16])),
@@ -95,13 +95,13 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
         column![
             section_title("Skip media types"),
             caption("Excluded from every search via -type: filters."),
-            switch("Skip videos (.webm)", form.skip_video, |v| {
-                Message::SkipVideo(v)
-            }),
-            switch("Skip flash (.swf)", form.skip_flash, |v| Message::SkipFlash(v)),
-            switch("Skip animations (.gif)", form.skip_animation, |v| {
-                Message::SkipAnimation(v)
-            }),
+            switch("Skip videos (.webm)", form.skip_video, Message::SkipVideo),
+            switch("Skip flash (.swf)", form.skip_flash, Message::SkipFlash),
+            switch(
+                "Skip animations (.gif)",
+                form.skip_animation,
+                Message::SkipAnimation,
+            ),
         ]
         .spacing(10)
         .padding(Padding::from([18u16, 20u16])),

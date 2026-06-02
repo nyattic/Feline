@@ -52,16 +52,11 @@ impl Site {
 
     pub fn from_media_host(host: &str) -> Option<Site> {
         let host = host.trim_end_matches('.');
-        for site in SITES {
-            if site
-                .media_hosts()
+        SITES.into_iter().find(|site| {
+            site.media_hosts()
                 .iter()
                 .any(|h| host == *h || host.ends_with(&format!(".{h}")))
-            {
-                return Some(site);
-            }
-        }
-        None
+        })
     }
 }
 

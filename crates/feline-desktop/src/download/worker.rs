@@ -2,20 +2,20 @@ use anyhow::anyhow;
 use backon::{ExponentialBuilder, Retryable};
 use futures::StreamExt;
 use md5::{Digest, Md5};
-use reqwest::Url;
 use std::path::{Path, PathBuf};
+use url::Url;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
 use super::manager::JobControl;
+use feline_core::Site;
 use feline_core::e621::types::Post;
 use feline_core::util::{safe_truncate, sanitize_path_component};
 
 pub const MAX_RETRIES: usize = 5;
 const VERIFY_RETRIES: usize = 1;
-const ALLOWED_FILE_HOSTS: &[&str] = &["static1.e621.net", "static1.e926.net"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
@@ -48,7 +48,7 @@ pub fn target_path(root: &Path, tags: &str, post: &Post) -> PathBuf {
 }
 
 pub async fn download_post(
-    http: &reqwest::Client,
+    http: &wreq::Client,
     post: &Post,
     download_root: &Path,
     tags: &str,
@@ -133,7 +133,7 @@ pub async fn download_post(
 }
 
 async fn stream_to_file_verified(
-    http: &reqwest::Client,
+    http: &wreq::Client,
     url: &str,
     tmp_path: &Path,
     expected_md5: &str,
@@ -232,7 +232,7 @@ fn validate_file_url(raw: &str) -> Result<(), DownloadError> {
     let Some(host) = url.host_str() else {
         return Err(DownloadError::InvalidUrl("file url has no host".into()));
     };
-    if !ALLOWED_FILE_HOSTS.contains(&host) {
+    if Site::from_media_host(host).is_none() {
         return Err(DownloadError::InvalidUrl(format!(
             "host {host} is not allowed"
         )));
@@ -263,8 +263,10 @@ mod tests {
     #[test]
     fn validates_expected_file_hosts() {
         assert!(validate_file_url("https://static1.e621.net/data/aa/bb/file.jpg").is_ok());
+        assert!(validate_file_url("https://static2.e621.net/data/aa/bb/file.jpg").is_ok());
         assert!(validate_file_url("https://static1.e926.net/data/aa/bb/file.jpg").is_ok());
         assert!(validate_file_url("http://static1.e621.net/data/file.jpg").is_err());
         assert!(validate_file_url("https://example.com/file.jpg").is_err());
+        assert!(validate_file_url("https://static1.e621.net.evil.com/file.jpg").is_err());
     }
 }

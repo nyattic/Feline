@@ -1,11 +1,13 @@
+use backon::{ExponentialBuilder, Retryable};
 use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{Notify, mpsc};
+use tokio::task::JoinHandle;
 
 use super::dedup::Md5Index;
 use super::worker::{DownloadError, download_post};
@@ -17,6 +19,8 @@ use feline_core::e621::rate_limit::{ApiLimiter, new_api_limiter};
 use feline_core::e621::types::Post;
 
 pub const CONCURRENT_DOWNLOADS: usize = 4;
+
+const DISCOVERY_BUFFER: usize = 64;
 
 #[derive(Debug, Clone)]
 pub enum DownloadEvent {
@@ -245,18 +249,11 @@ async fn wait_while_paused(
     false
 }
 
-enum NextDownload<T> {
-    Completed(T),
-    Exhausted,
-    Cancelled,
-}
-
 type DownloadOutcome = (u64, String, u64, Result<std::path::PathBuf, DownloadError>);
 
 struct ProgressState {
     done: usize,
     failed: usize,
-    discovered_total: usize,
     bytes_in_window: u64,
     window_start: Instant,
 }
@@ -329,39 +326,6 @@ fn mark_post_permanently_failed(state: &StateStore, tags: &str, post_id: u64) {
     }
 }
 
-async fn next_download_or_control<Fut>(
-    job_id: u64,
-    futs: &mut FuturesUnordered<Fut>,
-    control: &JobControl,
-    events: &mpsc::UnboundedSender<DownloadEvent>,
-) -> NextDownload<Fut::Output>
-where
-    Fut: Future + Unpin,
-{
-    loop {
-        if control.is_cancelled() {
-            return NextDownload::Cancelled;
-        }
-        if futs.is_empty() {
-            return NextDownload::Exhausted;
-        }
-
-        tokio::select! {
-            maybe = futs.next() => {
-                return match maybe {
-                    Some(output) => NextDownload::Completed(output),
-                    None => NextDownload::Exhausted,
-                };
-            }
-            _ = control.wake.notified() => {
-                if wait_while_paused(job_id, control, events).await {
-                    return NextDownload::Cancelled;
-                }
-            }
-        }
-    }
-}
-
 async fn run_job(
     job_id: u64,
     tags: String,
@@ -391,83 +355,104 @@ async fn run_job(
     let http = client.http().clone();
     let start = Instant::now();
 
-    let discovery = match discover_posts(
+    let (post_tx, mut post_rx) = mpsc::channel::<Post>(DISCOVERY_BUFFER);
+    let mut discovery: Option<JoinHandle<DiscoverySummary>> = Some(tokio::spawn(discover_stream(
         job_id,
-        &tags,
-        &cfg,
-        &client,
-        &state,
-        &existing_failed,
-        &md5_index,
-        &control,
-        &events,
-    )
-    .await?
-    {
-        Some(r) => r,
-        None => return Ok(()),
-    };
-
-    let total = discovery.to_download.len();
-    let _ = events.send(DownloadEvent::DiscoveryDone {
-        job_id,
-        total_posts: total,
-        skipped_existing: discovery.skipped_existing,
-        skipped_failed: discovery.skipped_failed,
-    });
-
-    if total == 0 {
-        let _ = events.send(DownloadEvent::JobFinished {
-            job_id,
-            done: 0,
-            failed: 0,
-            total: 0,
-            duration_ms: 0,
-        });
-        return Ok(());
-    }
+        tags.clone(),
+        cfg.clone(),
+        client.clone(),
+        state.clone(),
+        existing_failed,
+        md5_index.clone(),
+        control.clone(),
+        events.clone(),
+        post_tx,
+    )));
 
     let mut progress = ProgressState {
         done: 0,
         failed: 0,
-        discovered_total: total,
         bytes_in_window: 0,
         window_start: Instant::now(),
     };
     let mut futs: FuturesUnordered<BoxFuture<'static, DownloadOutcome>> = FuturesUnordered::new();
-    let mut pending = discovery.to_download.into_iter();
+    let mut dispatched: usize = 0;
+    let mut channel_open = true;
 
-    while futs.len() < CONCURRENT_DOWNLOADS {
-        let Some(post) = pending.next() else { break };
-        futs.push(spawn_download(post, &http, &download_root, &tags, &control));
-    }
-
-    while !futs.is_empty() {
+    loop {
         if wait_while_paused(job_id, &control, &events).await {
+            if let Some(handle) = discovery.take() {
+                handle.abort();
+            }
             let _ = state.save();
             let _ = events.send(DownloadEvent::JobCancelled { job_id });
             return Ok(());
         }
-        match next_download_or_control(job_id, &mut futs, &control, &events).await {
-            NextDownload::Completed(outcome) => {
-                handle_download_outcome(
-                    outcome,
+
+        if !channel_open && let Some(handle) = discovery.take() {
+            let summary = handle.await.unwrap_or_default();
+            if let Some(err) = summary.error {
+                let _ = state.save();
+                let _ = events.send(DownloadEvent::JobError { job_id, error: err });
+                return Ok(());
+            }
+            if !summary.cancelled {
+                let _ = events.send(DownloadEvent::DiscoveryDone {
                     job_id,
-                    &tags,
-                    &state,
-                    &md5_index,
-                    &events,
-                    &mut progress,
-                );
-                if let Some(post) = pending.next() {
+                    total_posts: summary.total,
+                    skipped_existing: summary.skipped_existing,
+                    skipped_failed: summary.skipped_failed,
+                });
+            }
+        }
+
+        while channel_open && futs.len() < CONCURRENT_DOWNLOADS {
+            match post_rx.try_recv() {
+                Ok(post) => {
+                    dispatched += 1;
                     futs.push(spawn_download(post, &http, &download_root, &tags, &control));
                 }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => channel_open = false,
             }
-            NextDownload::Exhausted => break,
-            NextDownload::Cancelled => {
-                let _ = state.save();
-                let _ = events.send(DownloadEvent::JobCancelled { job_id });
-                return Ok(());
+        }
+
+        if futs.is_empty() {
+            if !channel_open {
+                break;
+            }
+            tokio::select! {
+                biased;
+                _ = control.wake.notified() => {}
+                maybe = post_rx.recv() => match maybe {
+                    Some(post) => {
+                        dispatched += 1;
+                        futs.push(spawn_download(post, &http, &download_root, &tags, &control));
+                    }
+                    None => channel_open = false,
+                },
+            }
+            continue;
+        }
+
+        tokio::select! {
+            biased;
+            _ = control.wake.notified() => {}
+            outcome = futs.next() => {
+                if let Some(outcome) = outcome {
+                    handle_download_outcome(
+                        outcome, job_id, &tags, &state, &md5_index, &events, &mut progress,
+                    );
+                }
+            }
+            maybe = post_rx.recv(), if channel_open && futs.len() < CONCURRENT_DOWNLOADS => {
+                match maybe {
+                    Some(post) => {
+                        dispatched += 1;
+                        futs.push(spawn_download(post, &http, &download_root, &tags, &control));
+                    }
+                    None => channel_open = false,
+                }
             }
         }
     }
@@ -484,45 +469,68 @@ async fn run_job(
         job_id,
         done: progress.done,
         failed: progress.failed,
-        total: progress.discovered_total,
+        total: dispatched,
         duration_ms,
     });
     Ok(())
 }
 
-struct DiscoveryResult {
-    to_download: Vec<Post>,
+#[derive(Default)]
+struct DiscoverySummary {
+    total: usize,
     skipped_existing: usize,
     skipped_failed: usize,
+    cancelled: bool,
+    error: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn discover_posts(
+async fn discover_stream(
     job_id: u64,
-    tags: &str,
-    cfg: &Config,
-    client: &Client,
-    state: &StateStore,
-    existing_failed: &std::collections::HashSet<u64>,
-    md5_index: &Md5Index,
-    control: &JobControl,
-    events: &mpsc::UnboundedSender<DownloadEvent>,
-) -> anyhow::Result<Option<DiscoveryResult>> {
-    let mut to_download: Vec<Post> = Vec::new();
-    let mut skipped_existing: usize = 0;
-    let mut skipped_failed: usize = 0;
+    tags: String,
+    cfg: Config,
+    client: Client,
+    state: StateStore,
+    existing_failed: std::collections::HashSet<u64>,
+    md5_index: Md5Index,
+    control: Arc<JobControl>,
+    events: mpsc::UnboundedSender<DownloadEvent>,
+    post_tx: mpsc::Sender<Post>,
+) -> DiscoverySummary {
+    let mut summary = DiscoverySummary::default();
     let mut before_id: Option<u64> = None;
     let mut pages_scanned: u32 = 0;
 
+    let backoff = ExponentialBuilder::default()
+        .with_min_delay(Duration::from_millis(500))
+        .with_max_delay(Duration::from_secs(15))
+        .with_max_times(4)
+        .with_jitter();
+
     loop {
-        if wait_while_paused(job_id, control, events).await {
-            let _ = events.send(DownloadEvent::JobCancelled { job_id });
-            return Ok(None);
+        if control.wait_if_paused().await {
+            summary.cancelled = true;
+            return summary;
         }
 
-        let page = client
-            .search_page(tags, &cfg.blacklist, cfg.rating, cfg.media_skip, before_id)
-            .await?;
+        let page = match (|| async {
+            client
+                .search_page(&tags, &cfg.blacklist, cfg.rating, cfg.media_skip, before_id)
+                .await
+        })
+        .retry(backoff)
+        .notify(|err, dur| {
+            tracing::warn!(?dur, "search retry for `{tags}`: {err:#}");
+        })
+        .await
+        {
+            Ok(page) => page,
+            Err(err) => {
+                summary.cancelled = true;
+                summary.error = Some(format!("{err:#}"));
+                return summary;
+            }
+        };
 
         pages_scanned += 1;
         if page.is_empty() {
@@ -535,29 +543,33 @@ async fn discover_posts(
                 lowest_id_on_page = post.id;
             }
             if existing_failed.contains(&post.id) {
-                skipped_failed += 1;
+                summary.skipped_failed += 1;
                 continue;
             }
             if md5_index.contains(&post.file.md5) {
-                skipped_existing += 1;
+                summary.skipped_existing += 1;
                 continue;
             }
             if post.file.url.is_none() {
-                skipped_failed += 1;
-                mark_post_permanently_failed(state, tags, post.id);
+                summary.skipped_failed += 1;
+                mark_post_permanently_failed(&state, &tags, post.id);
                 let _ = events.send(DownloadEvent::PostFailed {
                     post_id: post.id,
                     error: "post has no file url (deleted or restricted)".into(),
                 });
                 continue;
             }
-            to_download.push(post);
+            if post_tx.send(post).await.is_err() {
+                summary.cancelled = true;
+                return summary;
+            }
+            summary.total += 1;
         }
 
         let _ = events.send(DownloadEvent::Discovering {
             job_id,
             pages_scanned,
-            posts_queued: to_download.len(),
+            posts_queued: summary.total,
         });
 
         if lowest_id_on_page == u64::MAX {
@@ -566,16 +578,12 @@ async fn discover_posts(
         before_id = Some(lowest_id_on_page);
     }
 
-    Ok(Some(DiscoveryResult {
-        to_download,
-        skipped_existing,
-        skipped_failed,
-    }))
+    summary
 }
 
 fn spawn_download(
     post: Post,
-    http: &reqwest::Client,
+    http: &wreq::Client,
     download_root: &std::path::Path,
     tags: &str,
     control: &Arc<JobControl>,

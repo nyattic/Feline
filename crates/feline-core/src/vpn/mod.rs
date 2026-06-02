@@ -46,10 +46,6 @@ impl VpnHandle {
         )
     }
 
-    pub fn proxy_display_url(&self) -> Option<String> {
-        self.socks.as_ref().map(|s| s.proxy_display_url())
-    }
-
     pub async fn shutdown(mut self) {
         if let Some(socks) = self.socks.take() {
             socks.shutdown().await;

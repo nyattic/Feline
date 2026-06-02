@@ -22,7 +22,6 @@ ffi = []
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs"] }
-reqwest = { workspace = true }
 wreq = { workspace = true }
 wreq-util = { workspace = true }
 url = { workspace = true }
@@ -35,3 +34,5 @@ boringtun = { workspace = true }
 smoltcp = { workspace = true }
 base64 = { workspace = true }
 rand = { workspace = true }
+md-5 = { workspace = true }
+hex = { workspace = true }

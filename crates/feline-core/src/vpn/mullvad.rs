@@ -178,12 +178,6 @@ struct DeviceResponse {
     ipv6_address: String,
 }
 
-#[derive(Deserialize)]
-struct DeviceSummary {
-    id: String,
-    pubkey: String,
-}
-
 pub async fn register_device(token: &str, public_key: &str) -> Result<RegisteredDevice> {
     let http = client()?;
     let resp = http
@@ -215,25 +209,6 @@ pub async fn register_device(token: &str, public_key: &str) -> Result<Registered
         name: device.name,
         addresses,
     })
-}
-
-pub async fn device_exists(token: &str, device_id: &str, public_key: &str) -> Result<bool> {
-    let http = client()?;
-    let resp = http
-        .get(DEVICES_URL)
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("list Mullvad devices")?;
-
-    if !resp.status().is_success() {
-        return Ok(false);
-    }
-
-    let devices: Vec<DeviceSummary> = resp.json().await.context("decode Mullvad device list")?;
-    Ok(devices
-        .iter()
-        .any(|d| d.id == device_id && d.pubkey == public_key))
 }
 
 pub async fn delete_device(token: &str, device_id: &str) -> Result<()> {

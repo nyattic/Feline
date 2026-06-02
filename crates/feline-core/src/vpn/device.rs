@@ -10,6 +10,12 @@ pub struct PacketQueues {
     pub outbound: Arc<Mutex<VecDeque<Vec<u8>>>>,
 }
 
+impl Default for PacketQueues {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PacketQueues {
     pub fn new() -> Self {
         Self {
