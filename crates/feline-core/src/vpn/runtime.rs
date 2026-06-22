@@ -37,6 +37,7 @@ const DNS_PKT_BUF: usize = 4096;
 const DNS_META_SLOTS: usize = 16;
 const FALLBACK_DNS: Ipv4Addr = Ipv4Addr::new(1, 1, 1, 1);
 const HANDSHAKE_NONE: u64 = u64::MAX;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub enum EngineCmd {
     OpenTcp {
@@ -60,6 +61,7 @@ pub struct TcpSession {
     pub handle: SocketHandle,
     pub cmd_tx: mpsc::Sender<EngineCmd>,
     pub inbound: mpsc::Receiver<Vec<u8>>,
+    pub connected: Option<oneshot::Receiver<Result<()>>>,
 }
 
 pub struct EngineHandle {
@@ -205,10 +207,12 @@ fn resolve_endpoint(s: &str) -> Result<SocketAddr> {
 }
 
 struct ManagedSocket {
-    inbound_tx: mpsc::Sender<Vec<u8>>,
+    inbound_tx: Option<mpsc::Sender<Vec<u8>>>,
     pending_outbound: std::collections::VecDeque<Vec<u8>>,
     half_close_requested: bool,
     local_port: u16,
+    pending_connect: Option<oneshot::Sender<Result<()>>>,
+    connect_deadline: StdInstant,
 }
 
 type DnsReplySender = oneshot::Sender<Result<Vec<IpAddr>>>;
@@ -367,6 +371,7 @@ async fn run_engine(
         let now = SmolInstant::now();
         iface.poll(now, &mut device, &mut sockets);
 
+        resolve_connects(&mut sockets, &mut managed, StdInstant::now());
         pump_sessions(&mut sockets, &mut managed);
         drain_dns_responses(&mut sockets, dns_handle, &mut pending_dns);
         flush_outbound(&queues, &mut tunn, &udp, &mut send_scratch).await;
@@ -412,13 +417,16 @@ fn open_tcp_session(
 
     let handle = sockets.add(socket);
     let (inbound_tx, inbound_rx) = mpsc::channel(CHANNEL_DEPTH);
+    let (connect_tx, connect_rx) = oneshot::channel();
     managed.insert(
         handle,
         ManagedSocket {
-            inbound_tx,
+            inbound_tx: Some(inbound_tx),
             pending_outbound: Default::default(),
             half_close_requested: false,
             local_port,
+            pending_connect: Some(connect_tx),
+            connect_deadline: StdInstant::now() + CONNECT_TIMEOUT,
         },
     );
 
@@ -426,6 +434,7 @@ fn open_tcp_session(
         handle,
         cmd_tx: cmd_tx.clone(),
         inbound: inbound_rx,
+        connected: Some(connect_rx),
     })
 }
 
@@ -445,11 +454,47 @@ fn allocate_port(next_port: &mut u16, in_use: &HashSet<u16>) -> Option<u16> {
     None
 }
 
+fn resolve_connects(
+    sockets: &mut SocketSet<'static>,
+    managed: &mut HashMap<SocketHandle, ManagedSocket>,
+    now: StdInstant,
+) {
+    for (handle, mgr) in managed.iter_mut() {
+        if mgr.pending_connect.is_none() {
+            continue;
+        }
+        let sock = sockets.get_mut::<tcp::Socket>(*handle);
+        match sock.state() {
+            tcp::State::Closed => {
+                if let Some(tx) = mgr.pending_connect.take() {
+                    let _ = tx.send(Err(anyhow!("connection refused or reset by remote")));
+                }
+            }
+            tcp::State::SynSent | tcp::State::SynReceived => {
+                if now >= mgr.connect_deadline {
+                    sock.abort();
+                    if let Some(tx) = mgr.pending_connect.take() {
+                        let _ = tx.send(Err(anyhow!("connection attempt timed out")));
+                    }
+                }
+            }
+            _ => {
+                if let Some(tx) = mgr.pending_connect.take() {
+                    let _ = tx.send(Ok(()));
+                }
+            }
+        }
+    }
+}
+
 fn pump_sessions(
     sockets: &mut SocketSet<'static>,
     managed: &mut HashMap<SocketHandle, ManagedSocket>,
 ) {
     for (handle, mgr) in managed.iter_mut() {
+        if mgr.pending_connect.is_some() {
+            continue;
+        }
         let sock = sockets.get_mut::<tcp::Socket>(*handle);
 
         while sock.can_send() {
@@ -472,28 +517,35 @@ fn pump_sessions(
             sock.close();
         }
 
+        let mut channel_closed = false;
         while sock.can_recv() {
-            if mgr.inbound_tx.capacity() == 0 {
+            use tokio::sync::mpsc::error::TrySendError;
+            let Some(tx) = mgr.inbound_tx.as_ref() else {
                 break;
-            }
+            };
+            let permit = match tx.try_reserve() {
+                Ok(permit) => permit,
+                Err(TrySendError::Full(())) => break,
+                Err(TrySendError::Closed(())) => {
+                    channel_closed = true;
+                    break;
+                }
+            };
             let drained = sock.recv(|buf| {
                 let len = buf.len();
                 (len, buf.to_vec())
             });
             match drained {
-                Ok(data) if !data.is_empty() => {
-                    use tokio::sync::mpsc::error::TrySendError;
-                    match mgr.inbound_tx.try_send(data) {
-                        Ok(()) => {}
-                        Err(TrySendError::Full(_)) => break,
-                        Err(TrySendError::Closed(_)) => {
-                            sock.close();
-                            break;
-                        }
-                    }
-                }
+                Ok(data) if !data.is_empty() => permit.send(data),
                 _ => break,
             }
+        }
+
+        if channel_closed {
+            sock.close();
+            mgr.inbound_tx = None;
+        } else if !sock.may_recv() && !sock.can_recv() {
+            mgr.inbound_tx = None;
         }
     }
 }

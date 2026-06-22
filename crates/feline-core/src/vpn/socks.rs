@@ -136,7 +136,7 @@ async fn handle_client(
         .send(EngineCmd::OpenTcp { dst, reply: tx })
         .await
         .map_err(|_| anyhow!("vpn engine closed before OpenTcp"))?;
-    let session = match rx.await {
+    let mut session = match rx.await {
         Ok(Ok(s)) => s,
         Ok(Err(err)) => {
             write_reply(&mut stream, REP_GENERAL_FAILURE).await?;
@@ -147,6 +147,24 @@ async fn handle_client(
             bail!("vpn engine dropped OpenTcp reply");
         }
     };
+
+    match session.connected.take() {
+        Some(connected) => match connected.await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                write_reply(&mut stream, REP_HOST_UNREACHABLE).await?;
+                return Err(err);
+            }
+            Err(_) => {
+                write_reply(&mut stream, REP_GENERAL_FAILURE).await?;
+                bail!("vpn engine dropped connect notification");
+            }
+        },
+        None => {
+            write_reply(&mut stream, REP_GENERAL_FAILURE).await?;
+            bail!("vpn engine omitted connect notification");
+        }
+    }
 
     write_reply(&mut stream, REP_OK).await?;
     bridge(stream, session).await
