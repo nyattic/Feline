@@ -1,10 +1,10 @@
+use crate::Site;
 use crate::credentials::Credentials;
 use crate::e621::client::Client;
 use crate::e621::rate_limit::new_api_limiter;
 use crate::vpn;
 use crate::vpn::config::IpCidr;
 use crate::vpn::mullvad;
-use crate::Site;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -16,7 +16,10 @@ pub struct FfiCredentials {
 
 impl From<FfiCredentials> for Credentials {
     fn from(c: FfiCredentials) -> Self {
-        Credentials { username: c.username, api_key: c.api_key }
+        Credentials {
+            username: c.username,
+            api_key: c.api_key,
+        }
     }
 }
 
@@ -115,10 +118,16 @@ pub enum FfiError {
     Network(String),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    #[error("session expired: {0}")]
+    SessionExpired(String),
 }
 
 impl From<anyhow::Error> for FfiError {
     fn from(e: anyhow::Error) -> Self {
+        if e.downcast_ref::<mullvad::MullvadError>().is_some() {
+            return FfiError::SessionExpired("Mullvad session expired".into());
+        }
+
         let s = format!("{e:#}");
         if s.contains("path must start with '/'") || s.contains("unsupported HTTP method") {
             FfiError::InvalidArgument(s)
@@ -165,12 +174,18 @@ impl E621Core {
             .raw_request(&method, &path, &q, body, content_type.as_deref())
             .await
             .map_err(FfiError::from)?;
-        Ok(FfiResponse { status: resp.status, body: resp.body })
+        Ok(FfiResponse {
+            status: resp.status,
+            body: resp.body,
+        })
     }
 
     pub async fn fetch_media(&self, url: String) -> Result<FfiResponse, FfiError> {
         let resp = self.inner.fetch_media(&url).await.map_err(FfiError::from)?;
-        Ok(FfiResponse { status: resp.status, body: resp.body })
+        Ok(FfiResponse {
+            status: resp.status,
+            body: resp.body,
+        })
     }
 
     pub async fn download_to_file(&self, url: String, dest_path: String) -> Result<u16, FfiError> {
@@ -198,8 +213,8 @@ impl FelineVpn {
     }
 
     pub async fn enable(&self, config_text: String) -> Result<(), FfiError> {
-        let cfg = vpn::parse(&config_text)
-            .map_err(|e| FfiError::InvalidArgument(format!("{e:#}")))?;
+        let cfg =
+            vpn::parse(&config_text).map_err(|e| FfiError::InvalidArgument(format!("{e:#}")))?;
         self.swap_handle(cfg).await
     }
 
@@ -209,10 +224,15 @@ impl FelineVpn {
         city_code: Option<String>,
     ) -> Result<(), FfiError> {
         let profile = ffi_to_profile(profile).map_err(FfiError::from)?;
+        mullvad::ensure_device_active(&profile.account_number, &profile.device_id)
+            .await
+            .map_err(FfiError::from)?;
         let relays = mullvad::fetch_relays().await.map_err(FfiError::from)?;
         let chosen = match city_code {
             Some(code) => relays.choose(&code),
-            None => relays.choose(&profile.city_code).or_else(|| relays.default_choice()),
+            None => relays
+                .choose(&profile.city_code)
+                .or_else(|| relays.default_choice()),
         }
         .ok_or_else(|| FfiError::Network("the selected Mullvad city is unavailable".into()))?;
         let cfg = mullvad::build_config(&profile, &chosen).map_err(FfiError::from)?;
@@ -227,7 +247,11 @@ impl FelineVpn {
             .clone()
             .ok_or_else(|| FfiError::Network("no VPN configuration to reconnect".into()))?;
         let handle = vpn::VpnHandle::start(cfg).await.map_err(FfiError::from)?;
-        let previous = self.inner.lock().expect("vpn handle poisoned").replace(handle);
+        let previous = self
+            .inner
+            .lock()
+            .expect("vpn handle poisoned")
+            .replace(handle);
         if let Some(previous) = previous {
             previous.shutdown().await;
         }
@@ -265,9 +289,15 @@ impl FelineVpn {
 
 impl FelineVpn {
     async fn swap_handle(&self, cfg: vpn::WgConfig) -> Result<(), FfiError> {
-        let handle = vpn::VpnHandle::start(cfg.clone()).await.map_err(FfiError::from)?;
+        let handle = vpn::VpnHandle::start(cfg.clone())
+            .await
+            .map_err(FfiError::from)?;
         *self.last_config.lock().expect("vpn config poisoned") = Some(cfg);
-        let previous = self.inner.lock().expect("vpn handle poisoned").replace(handle);
+        let previous = self
+            .inner
+            .lock()
+            .expect("vpn handle poisoned")
+            .replace(handle);
         if let Some(previous) = previous {
             previous.shutdown().await;
         }
@@ -285,7 +315,9 @@ pub fn validate_wg_config(config_text: String) -> Result<(), FfiError> {
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn mullvad_sign_in(account_number: String) -> Result<FfiMullvadProfile, FfiError> {
     let account = mullvad::normalize_account(&account_number).map_err(FfiError::from)?;
-    let token = mullvad::fetch_token(&account).await.map_err(FfiError::from)?;
+    let token = mullvad::fetch_token(&account)
+        .await
+        .map_err(FfiError::from)?;
     let (private_key, public_key) = mullvad::generate_keypair();
     let device = mullvad::register_device(&token, &public_key)
         .await
@@ -343,7 +375,9 @@ pub async fn mullvad_locations() -> Result<Vec<FfiMullvadCountry>, FfiError> {
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn mullvad_sign_out(account_number: String, device_id: String) -> Result<(), FfiError> {
     let account = mullvad::normalize_account(&account_number).map_err(FfiError::from)?;
-    let token = mullvad::fetch_token(&account).await.map_err(FfiError::from)?;
+    let token = mullvad::fetch_token(&account)
+        .await
+        .map_err(FfiError::from)?;
     mullvad::delete_device(&token, &device_id)
         .await
         .map_err(FfiError::from)

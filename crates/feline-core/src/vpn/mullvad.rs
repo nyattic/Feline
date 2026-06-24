@@ -44,6 +44,12 @@ pub struct RegisteredDevice {
     pub addresses: Vec<IpCidr>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MullvadError {
+    #[error("Mullvad session expired")]
+    SessionExpired,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MullvadCity {
     pub code: String,
@@ -192,6 +198,9 @@ pub async fn register_device(token: &str, public_key: &str) -> Result<Registered
         .context("register device with Mullvad")?;
 
     let status = resp.status();
+    if status.as_u16() == 401 {
+        return Err(MullvadError::SessionExpired.into());
+    }
     if !status.is_success() {
         let body = body_snippet(resp).await;
         if body.to_ascii_uppercase().contains("MAX_DEVICES") {
@@ -202,13 +211,43 @@ pub async fn register_device(token: &str, public_key: &str) -> Result<Registered
         bail!("Mullvad device registration failed: HTTP {status} {body}");
     }
 
-    let device: DeviceResponse = resp.json().await.context("decode Mullvad device response")?;
+    let device: DeviceResponse = resp
+        .json()
+        .await
+        .context("decode Mullvad device response")?;
     let addresses = parse_addresses(&device.ipv4_address, &device.ipv6_address)?;
     Ok(RegisteredDevice {
         id: device.id,
         name: device.name,
         addresses,
     })
+}
+
+pub async fn ensure_device_active(account_number: &str, device_id: &str) -> Result<()> {
+    let token = fetch_token(account_number).await?;
+    let http = client()?;
+    let resp = http
+        .get(DEVICES_URL)
+        .bearer_auth(token)
+        .send()
+        .await
+        .context("fetch Mullvad devices")?;
+
+    let status = resp.status();
+    if status.as_u16() == 401 {
+        return Err(MullvadError::SessionExpired.into());
+    }
+    if !status.is_success() {
+        let body = body_snippet(resp).await;
+        bail!("Mullvad device check failed: HTTP {status} {body}");
+    }
+
+    let devices: Vec<DeviceResponse> = resp.json().await.context("decode Mullvad devices")?;
+    if devices.iter().any(|device| device.id == device_id) {
+        return Ok(());
+    }
+
+    Err(MullvadError::SessionExpired.into())
 }
 
 pub async fn delete_device(token: &str, device_id: &str) -> Result<()> {
@@ -221,6 +260,9 @@ pub async fn delete_device(token: &str, device_id: &str) -> Result<()> {
         .context("remove device from Mullvad")?;
 
     let status = resp.status();
+    if status.as_u16() == 401 {
+        return Err(MullvadError::SessionExpired.into());
+    }
     if status.is_success() || status.as_u16() == 404 {
         return Ok(());
     }
@@ -299,7 +341,10 @@ impl RelayList {
 
     pub fn default_choice(&self) -> Option<ChosenRelay> {
         let tree = self.locations_tree();
-        let preferred = tree.iter().find(|c| c.code == "jp").or_else(|| tree.first());
+        let preferred = tree
+            .iter()
+            .find(|c| c.code == "jp")
+            .or_else(|| tree.first());
         let city_code = preferred?.cities.first()?.code.clone();
         self.choose(&city_code)
     }
