@@ -3,11 +3,11 @@ use backon::{ExponentialBuilder, Retryable};
 use futures::StreamExt;
 use md5::{Digest, Md5};
 use std::path::{Path, PathBuf};
-use url::Url;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use url::Url;
 
 use super::manager::JobControl;
 use feline_core::Site;
@@ -62,9 +62,17 @@ pub async fn download_post(
         .to_string();
     validate_file_url(&url)?;
     let final_path = target_path(download_root, tags, post);
+    let expected_md5 = post.file.md5.to_ascii_lowercase();
 
     if final_path.exists() {
-        return Ok(final_path);
+        if existing_file_is_valid(&final_path, &expected_md5, post.file.size).await? {
+            return Ok(final_path);
+        }
+        tracing::warn!(
+            path = %final_path.display(),
+            post_id = post.id,
+            "existing file failed verification; redownloading"
+        );
     }
 
     if let Some(parent) = final_path.parent() {
@@ -73,7 +81,6 @@ pub async fn download_post(
             .map_err(|e| DownloadError::Other(anyhow!("create parent dir: {e}")))?;
     }
 
-    let expected_md5 = post.file.md5.to_ascii_lowercase();
     let tmp_path = final_path.with_extension(format!("{}.part", post.file.ext));
 
     let backoff = ExponentialBuilder::default()
@@ -125,11 +132,47 @@ pub async fn download_post(
         return Err(err);
     }
 
+    if final_path.exists() {
+        tokio::fs::remove_file(&final_path)
+            .await
+            .map_err(|e| DownloadError::Other(anyhow!("remove invalid final file: {e}")))?;
+    }
+
     tokio::fs::rename(&tmp_path, &final_path)
         .await
         .map_err(|e| DownloadError::Other(anyhow!("rename tmp to final: {e}")))?;
 
     Ok(final_path)
+}
+
+async fn existing_file_is_valid(
+    path: &Path,
+    expected_md5: &str,
+    expected_size: u64,
+) -> Result<bool, DownloadError> {
+    let meta = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| DownloadError::Other(anyhow!("stat existing file: {e}")))?;
+    if !meta.is_file() || meta.len() != expected_size {
+        return Ok(false);
+    }
+
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| DownloadError::Other(anyhow!("open existing file: {e}")))?;
+    let mut hasher = Md5::new();
+    let mut buf = [0_u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .await
+            .map_err(|e| DownloadError::Other(anyhow!("read existing file: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()) == expected_md5)
 }
 
 async fn stream_to_file_verified(
@@ -258,7 +301,12 @@ impl DownloadError {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_file_url;
+    use super::{existing_file_is_valid, validate_file_url};
+    use std::path::PathBuf;
+
+    fn temp_file(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("feline-worker-test-{name}-{}", std::process::id()))
+    }
 
     #[test]
     fn validates_expected_file_hosts() {
@@ -268,5 +316,30 @@ mod tests {
         assert!(validate_file_url("http://static1.e621.net/data/file.jpg").is_err());
         assert!(validate_file_url("https://example.com/file.jpg").is_err());
         assert!(validate_file_url("https://static1.e621.net.evil.com/file.jpg").is_err());
+        assert!(validate_file_url("https://cdn.static1.e621.net/file.jpg").is_err());
+    }
+
+    #[tokio::test]
+    async fn validates_existing_file_by_size_and_md5() {
+        let path = temp_file("valid");
+        tokio::fs::write(&path, b"hello").await.unwrap();
+
+        assert!(
+            existing_file_is_valid(&path, "5d41402abc4b2a76b9719d911017c592", 5)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !existing_file_is_valid(&path, "5d41402abc4b2a76b9719d911017c592", 6)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !existing_file_is_valid(&path, "00000000000000000000000000000000", 5)
+                .await
+                .unwrap()
+        );
+
+        let _ = tokio::fs::remove_file(path).await;
     }
 }

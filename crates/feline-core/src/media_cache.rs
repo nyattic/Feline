@@ -5,24 +5,38 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 
 pub const MAX_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
 
 const TMP_PREFIX: &str = ".tmp-";
+const MARKER_FILENAME: &str = ".feline-media-cache";
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn key(url: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in url.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    hex::encode(Sha256::digest(url.as_bytes()))
 }
 
 fn is_temp(name: &str) -> bool {
     name.starts_with(TMP_PREFIX)
+}
+
+fn is_internal(name: &str) -> bool {
+    is_temp(name) || name == MARKER_FILENAME
+}
+
+pub fn prepare_dir(dir: &Path) -> Result<()> {
+    fs::create_dir_all(dir).context("create media cache dir")?;
+    let marker = dir.join(MARKER_FILENAME);
+    if !marker.exists() {
+        fs::File::create(marker).context("create media cache marker")?;
+    }
+    Ok(())
+}
+
+pub fn is_prepared_dir(dir: &Path) -> bool {
+    dir.join(MARKER_FILENAME).is_file()
 }
 
 pub fn is_cacheable_url(url: &str) -> bool {
@@ -45,7 +59,7 @@ pub fn read(dir: &Path, url: &str) -> Option<Vec<u8>> {
 }
 
 pub fn write(dir: &Path, url: &str, bytes: &[u8], max: u64) -> Result<()> {
-    fs::create_dir_all(dir).context("create media cache dir")?;
+    prepare_dir(dir)?;
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = dir.join(format!("{TMP_PREFIX}{}-{seq}", std::process::id()));
     {
@@ -70,7 +84,7 @@ pub fn size(dir: &Path) -> u64 {
                 return None;
             }
             let name = entry.file_name();
-            if name.to_str().is_some_and(is_temp) {
+            if name.to_str().is_some_and(is_internal) {
                 return None;
             }
             Some(meta.len())
@@ -85,6 +99,10 @@ pub fn clear(dir: &Path) -> Result<()> {
     for entry in entries {
         let entry = entry.context("read media cache entry")?;
         let path = entry.path();
+        let name = entry.file_name();
+        if name.to_str().is_some_and(is_internal) {
+            continue;
+        }
         if path.is_file() {
             fs::remove_file(&path)
                 .with_context(|| format!("remove media cache file `{}`", path.display()))?;
@@ -107,7 +125,7 @@ fn enforce_cap(dir: &Path, max: u64) {
             continue;
         }
         let name = entry.file_name();
-        if name.to_str().is_some_and(is_temp) {
+        if name.to_str().is_some_and(is_internal) {
             continue;
         }
         let len = meta.len();
@@ -147,6 +165,7 @@ mod tests {
     fn key_is_stable_and_distinct() {
         assert_eq!(key("https://x/a.jpg"), key("https://x/a.jpg"));
         assert_ne!(key("https://x/a.jpg"), key("https://x/b.jpg"));
+        assert_eq!(key("https://x/a.jpg").len(), 64);
     }
 
     #[test]
@@ -184,6 +203,19 @@ mod tests {
 
         assert!(read(&dir, "https://x/old.jpg").is_none());
         assert!(read(&dir, "https://x/new.jpg").is_some());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn clear_preserves_cache_marker() {
+        let dir = temp_dir();
+        prepare_dir(&dir).unwrap();
+        write(&dir, "https://x/a.jpg", b"hello", MAX_CACHE_BYTES).unwrap();
+
+        clear(&dir).unwrap();
+
+        assert!(is_prepared_dir(&dir));
+        assert_eq!(size(&dir), 0);
         fs::remove_dir_all(dir).unwrap();
     }
 }

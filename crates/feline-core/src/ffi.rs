@@ -2,9 +2,11 @@ use crate::Site;
 use crate::credentials::Credentials;
 use crate::e621::client::Client;
 use crate::e621::rate_limit::new_api_limiter;
+use crate::media_cache;
 use crate::vpn;
 use crate::vpn::config::IpCidr;
 use crate::vpn::mullvad;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -140,6 +142,7 @@ impl From<anyhow::Error> for FfiError {
 #[derive(uniffi::Object)]
 pub struct E621Core {
     inner: Client,
+    file_root: Option<PathBuf>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
@@ -153,11 +156,19 @@ impl E621Core {
     ) -> Result<Arc<Self>, FfiError> {
         let creds = credentials.map(Into::into);
         let limiter = new_api_limiter();
+        let file_root = cache_dir
+            .as_deref()
+            .map(prepare_file_root)
+            .transpose()
+            .map_err(|e| FfiError::InvalidArgument(format!("{e:#}")))?;
         let mut client = Client::with_limiter(site.into(), creds, limiter, proxy_url)
             .await
             .map_err(FfiError::from)?;
-        client.set_cache_dir(cache_dir.map(std::path::PathBuf::from));
-        Ok(Arc::new(Self { inner: client }))
+        client.set_cache_dir(file_root.clone());
+        Ok(Arc::new(Self {
+            inner: client,
+            file_root,
+        }))
     }
 
     pub async fn request(
@@ -189,11 +200,59 @@ impl E621Core {
     }
 
     pub async fn download_to_file(&self, url: String, dest_path: String) -> Result<u16, FfiError> {
+        let dest_path = scoped_file_path(self.file_root.as_deref(), &dest_path)?;
+        let dest_path = dest_path.to_string_lossy().into_owned();
         self.inner
             .download_to_file(&url, &dest_path)
             .await
             .map_err(FfiError::from)
     }
+}
+
+fn prepare_file_root(raw: &str) -> anyhow::Result<PathBuf> {
+    let dir = PathBuf::from(raw);
+    media_cache::prepare_dir(&dir)?;
+    dir.canonicalize()
+        .map_err(anyhow::Error::from)
+        .map_err(|e| e.context("canonicalize media cache dir"))
+}
+
+fn require_prepared_cache_dir(raw: &str) -> Result<PathBuf, FfiError> {
+    let dir = PathBuf::from(raw)
+        .canonicalize()
+        .map_err(|e| FfiError::InvalidArgument(format!("invalid media cache dir: {e}")))?;
+    if !media_cache::is_prepared_dir(&dir) {
+        return Err(FfiError::InvalidArgument(
+            "media cache dir is not managed by Feline".into(),
+        ));
+    }
+    Ok(dir)
+}
+
+fn scoped_file_path(root: Option<&Path>, raw_path: &str) -> Result<PathBuf, FfiError> {
+    let Some(root) = root else {
+        return Err(FfiError::InvalidArgument(
+            "download_to_file requires a configured cache_dir".into(),
+        ));
+    };
+    let path = PathBuf::from(raw_path);
+    if path.file_name().is_none() {
+        return Err(FfiError::InvalidArgument(
+            "destination path must include a file name".into(),
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        FfiError::InvalidArgument("destination path must include a parent directory".into())
+    })?;
+    let parent = parent
+        .canonicalize()
+        .map_err(|e| FfiError::InvalidArgument(format!("invalid destination parent: {e}")))?;
+    if !parent.starts_with(root) {
+        return Err(FfiError::InvalidArgument(
+            "destination path must be inside the configured cache_dir".into(),
+        ));
+    }
+    Ok(path)
 }
 
 #[derive(uniffi::Object)]
@@ -390,10 +449,52 @@ pub fn mask_mullvad_account(account_number: String) -> String {
 
 #[uniffi::export]
 pub fn media_cache_size(cache_dir: String) -> u64 {
-    crate::media_cache::size(std::path::Path::new(&cache_dir))
+    match require_prepared_cache_dir(&cache_dir) {
+        Ok(dir) => crate::media_cache::size(&dir),
+        Err(_) => 0,
+    }
 }
 
 #[uniffi::export]
 pub fn clear_media_cache(cache_dir: String) -> Result<(), FfiError> {
-    crate::media_cache::clear(std::path::Path::new(&cache_dir)).map_err(FfiError::from)
+    let dir = require_prepared_cache_dir(&cache_dir)?;
+    crate::media_cache::clear(&dir).map_err(FfiError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("feline-ffi-test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn scoped_file_path_rejects_paths_outside_root() {
+        let root = temp_dir("root").canonicalize().unwrap();
+        let outside = temp_dir("outside");
+        let outside_file = outside.join("file.jpg");
+
+        let err = scoped_file_path(Some(&root), outside_file.to_str().unwrap()).unwrap_err();
+
+        assert!(matches!(err, FfiError::InvalidArgument(_)));
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn scoped_file_path_accepts_paths_inside_root() {
+        let root = temp_dir("inside").canonicalize().unwrap();
+        let dest = root.join("file.jpg");
+
+        let scoped = scoped_file_path(Some(&root), dest.to_str().unwrap()).unwrap();
+
+        assert_eq!(scoped, dest);
+        let _ = fs::remove_dir_all(root);
+    }
 }

@@ -55,7 +55,7 @@ impl Site {
         SITES.into_iter().find(|site| {
             site.media_hosts()
                 .iter()
-                .any(|h| host == *h || host.ends_with(&format!(".{h}")))
+                .any(|h| host.eq_ignore_ascii_case(h))
         })
     }
 }

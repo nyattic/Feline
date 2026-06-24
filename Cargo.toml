@@ -4,7 +4,7 @@ members = ["crates/feline-core", "crates/feline-desktop"]
 default-members = ["crates/feline-desktop"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.95.0"
 license = "MIT"
@@ -26,6 +26,7 @@ governor = "0.10.4"
 backon = { version = "1.6.0", features = ["tokio-sleep"] }
 md-5 = "0.11.0"
 hex = "0.4.3"
+sha2 = "0.10.9"
 time = { version = "0.3.47", features = ["serde", "formatting", "macros"] }
 url = "2.5.4"
 boringtun = { version = "0.7", default-features = false }

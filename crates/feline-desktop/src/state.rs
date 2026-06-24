@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use feline_core::util::state_dir;
 
@@ -37,6 +38,7 @@ impl StateStore {
     pub fn load(path: &Path) -> Self {
         let data = match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice::<StateFile>(&bytes).unwrap_or_else(|e| {
+                preserve_invalid_file(path, "state");
                 tracing::warn!("failed to parse state, starting fresh: {e}");
                 StateFile::default()
             }),
@@ -83,4 +85,24 @@ impl StateStore {
         std::fs::rename(&tmp, &self.path).context("rename tmp state")?;
         Ok(())
     }
+}
+
+fn preserve_invalid_file(path: &Path, label: &str) {
+    let backup = invalid_backup_path(path);
+    match std::fs::copy(path, &backup) {
+        Ok(_) => tracing::warn!("preserved invalid {label} file at `{}`", backup.display()),
+        Err(e) => tracing::warn!("failed to preserve invalid {label} file: {e}"),
+    }
+}
+
+fn invalid_backup_path(path: &Path) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("state.json");
+    path.with_file_name(format!("{name}.invalid-{stamp}"))
 }

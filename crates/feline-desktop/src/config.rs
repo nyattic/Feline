@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use feline_core::{MediaSkip, RatingFilter, Site};
 
@@ -53,6 +54,7 @@ impl Config {
             Ok(bytes) => match serde_json::from_slice::<Config>(&bytes) {
                 Ok(cfg) => cfg,
                 Err(e) => {
+                    preserve_invalid_file(path, "config");
                     tracing::warn!("failed to parse config, using default: {e}");
                     Config::default()
                 }
@@ -90,4 +92,24 @@ impl Config {
     pub fn remove_query(&mut self, id: u64) {
         self.queries.retain(|q| q.id != id);
     }
+}
+
+fn preserve_invalid_file(path: &Path, label: &str) {
+    let backup = invalid_backup_path(path);
+    match std::fs::copy(path, &backup) {
+        Ok(_) => tracing::warn!("preserved invalid {label} file at `{}`", backup.display()),
+        Err(e) => tracing::warn!("failed to preserve invalid {label} file: {e}"),
+    }
+}
+
+fn invalid_backup_path(path: &Path) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("config.json");
+    path.with_file_name(format!("{name}.invalid-{stamp}"))
 }

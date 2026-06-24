@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "feline-core"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1669,6 +1669,7 @@ dependencies = [
  "rand 0.10.1",
  "serde",
  "serde_json",
+ "sha2",
  "smoltcp",
  "thiserror 2.0.18",
  "tokio",
@@ -1681,7 +1682,7 @@ dependencies = [
 
 [[package]]
 name = "feline-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "backon",

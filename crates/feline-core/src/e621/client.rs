@@ -223,7 +223,10 @@ impl Client {
             ));
         }
 
-        Ok(RawResponse { status, body: bytes })
+        Ok(RawResponse {
+            status,
+            body: bytes,
+        })
     }
 
     pub async fn fetch_media(&self, url: &str) -> Result<RawResponse> {
@@ -241,7 +244,10 @@ impl Client {
             && let Some(dir) = &self.cache_dir
             && let Some(bytes) = media_cache::read(dir, url)
         {
-            return Ok(RawResponse { status: 200, body: bytes });
+            return Ok(RawResponse {
+                status: 200,
+                body: bytes,
+            });
         }
 
         let mut req = self.api_http.get(parsed.as_str());
@@ -273,7 +279,10 @@ impl Client {
             let _ = media_cache::write(dir, url, &bytes, MAX_CACHE_BYTES);
         }
 
-        Ok(RawResponse { status, body: bytes })
+        Ok(RawResponse {
+            status,
+            body: bytes,
+        })
     }
 
     pub async fn download_to_file(&self, url: &str, dest_path: &str) -> Result<u16> {
@@ -389,7 +398,7 @@ fn host_accepts_credentials(host: &str, domains: &[&str]) -> bool {
     let host = host.trim_end_matches('.');
     domains
         .iter()
-        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+        .any(|domain| host.eq_ignore_ascii_case(domain))
 }
 
 fn is_allowed_media_host(host: &str) -> bool {
@@ -462,8 +471,8 @@ mod tests {
     #[test]
     fn host_accepts_credentials_for_subdomains() {
         let domains = Site::E621.credential_domains();
-        assert!(host_accepts_credentials("static1.e621.net", domains));
-        assert!(host_accepts_credentials("static1.e926.net", domains));
+        assert!(!host_accepts_credentials("static1.e621.net", domains));
+        assert!(!host_accepts_credentials("static1.e926.net", domains));
     }
 
     #[test]
@@ -471,16 +480,19 @@ mod tests {
         assert!(is_allowed_media_host("static1.e621.net"));
         assert!(is_allowed_media_host("static2.e926.net"));
         assert!(!is_allowed_media_host("example.com"));
+        assert!(!is_allowed_media_host("cdn.static1.e621.net"));
         assert!(!is_allowed_media_host("e621.net.evil.com"));
     }
 
     #[test]
     fn expected_md5_is_extracted_from_file_urls() {
         let md5 = "0123456789abcdef0123456789abcdef";
-        let url = url::Url::parse(&format!("https://static1.e621.net/data/01/23/{md5}.png")).unwrap();
+        let url =
+            url::Url::parse(&format!("https://static1.e621.net/data/01/23/{md5}.png")).unwrap();
         assert_eq!(expected_md5_from_url(&url), Some(md5.to_string()));
 
-        let sample = url::Url::parse("https://static1.e621.net/data/sample/01/23/preview.jpg").unwrap();
+        let sample =
+            url::Url::parse("https://static1.e621.net/data/sample/01/23/preview.jpg").unwrap();
         assert_eq!(expected_md5_from_url(&sample), None);
     }
 
