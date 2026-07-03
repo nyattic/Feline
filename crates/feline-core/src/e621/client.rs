@@ -141,16 +141,8 @@ impl Client {
 
         self.limiter.until_ready().await;
 
-        let mut req = self
-            .api_http
-            .get(self.url("posts.json"))
-            .query(&[("tags", full_query.as_str())])
-            .query(&[("limit", MAX_LIMIT.to_string().as_str())]);
-
-        if let Some(id) = before_id {
-            let page_param = format!("b{id}");
-            req = req.query(&[("page", page_param.as_str())]);
-        }
+        let params = search_params(full_query, before_id);
+        let req = self.api_http.get(self.url("posts.json")).query(&params);
 
         let resp = self
             .apply_auth(req)
@@ -410,6 +402,15 @@ fn is_allowed_media_host(host: &str) -> bool {
     Site::from_media_host(host).is_some()
 }
 
+fn search_params(full_query: String, before_id: Option<u64>) -> Vec<(&'static str, String)> {
+    let mut params: Vec<(&'static str, String)> =
+        vec![("tags", full_query), ("limit", MAX_LIMIT.to_string())];
+    if let Some(id) = before_id {
+        params.push(("page", format!("b{id}")));
+    }
+    params
+}
+
 fn parse_content_length(headers: &wreq::header::HeaderMap) -> Option<u64> {
     headers
         .get(wreq::header::CONTENT_LENGTH)
@@ -527,5 +528,28 @@ mod tests {
             "<title>Cloudflare Error 1020</title>"
         ));
         assert!(!is_cloudflare_challenge("{\"success\":false}"));
+    }
+
+    #[test]
+    fn search_request_keeps_tags_limit_and_page() {
+        let http = wreq::Client::builder().build().unwrap();
+        let params = search_params("cat rating:s".to_string(), Some(12345));
+        let uri = http
+            .get("https://e621.net/posts.json")
+            .query(&params)
+            .build()
+            .unwrap()
+            .uri()
+            .to_string();
+        assert!(uri.contains("tags="), "tags dropped from {uri}");
+        assert!(uri.contains("limit=320"), "limit dropped from {uri}");
+        assert!(uri.contains("page=b12345"), "page dropped from {uri}");
+    }
+
+    #[test]
+    fn search_request_omits_page_on_first_page() {
+        let params = search_params("dog".to_string(), None);
+        assert_eq!(params.len(), 2);
+        assert!(params.iter().all(|(k, _)| *k != "page"));
     }
 }

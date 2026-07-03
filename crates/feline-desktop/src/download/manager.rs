@@ -414,7 +414,17 @@ async fn run_job(
     }
 
     if let Some(handle) = discovery.take() {
-        let summary = handle.await.unwrap_or_default();
+        let summary = match handle.await {
+            Ok(summary) => summary,
+            Err(join_err) => {
+                let _ = state.save();
+                let _ = events.send(DownloadEvent::JobError {
+                    job_id,
+                    error: format!("discovery task failed: {join_err}"),
+                });
+                return Ok(());
+            }
+        };
         if let Some(err) = summary.error {
             let _ = state.save();
             let _ = events.send(DownloadEvent::JobError { job_id, error: err });
