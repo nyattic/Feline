@@ -52,7 +52,10 @@ impl Config {
     pub fn load_or_default(path: &Path) -> Self {
         match std::fs::read(path) {
             Ok(bytes) => match serde_json::from_slice::<Config>(&bytes) {
-                Ok(cfg) => cfg,
+                Ok(mut cfg) => {
+                    cfg.normalize();
+                    cfg
+                }
                 Err(e) => {
                     preserve_invalid_file(path, "config");
                     tracing::warn!("failed to parse config, using default: {e}");
@@ -92,6 +95,19 @@ impl Config {
     pub fn remove_query(&mut self, id: u64) {
         self.queries.retain(|q| q.id != id);
     }
+
+    fn normalize(&mut self) {
+        let next = self
+            .queries
+            .iter()
+            .map(|q| q.id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        if self.next_query_id < next {
+            self.next_query_id = next;
+        }
+    }
 }
 
 fn preserve_invalid_file(path: &Path, label: &str) {
@@ -112,4 +128,45 @@ fn invalid_backup_path(path: &Path) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("config.json");
     path.with_file_name(format!("{name}.invalid-{stamp}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Config, TagQuery};
+
+    #[test]
+    fn load_normalizes_next_query_id_for_legacy_config() {
+        let raw = r#"{
+            "site": "e621",
+            "download_dir": "/tmp/feline",
+            "blacklist": [],
+            "rating": { "safe": true, "questionable": true, "explicit": true },
+            "media_skip": {},
+            "queries": [
+                { "id": 3, "tags": "cat", "enabled": true },
+                { "id": 7, "tags": "dog", "enabled": true }
+            ]
+        }"#;
+
+        let mut cfg: Config = serde_json::from_str(raw).unwrap();
+        cfg.normalize();
+
+        assert_eq!(cfg.next_query_id, 8);
+    }
+
+    #[test]
+    fn new_query_does_not_reuse_existing_ids_after_normalize() {
+        let mut cfg = Config {
+            queries: vec![TagQuery {
+                id: 42,
+                tags: "existing".into(),
+                enabled: true,
+            }],
+            next_query_id: 0,
+            ..Config::default()
+        };
+
+        cfg.normalize();
+        assert_eq!(cfg.new_query("new".into()), 43);
+    }
 }

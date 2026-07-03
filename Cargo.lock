@@ -1647,7 +1647,7 @@ dependencies = [
 
 [[package]]
 name = "feline-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1672,7 +1672,7 @@ dependencies = [
 
 [[package]]
 name = "feline-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "backon",

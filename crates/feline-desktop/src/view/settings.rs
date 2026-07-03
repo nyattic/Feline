@@ -1,5 +1,7 @@
-use iced::widget::{Space, column, container, pick_list, row, scrollable, text, text_input};
-use iced::{Element, Length, Padding};
+use iced::widget::{
+    Space, column, container, pick_list, row, scrollable, text, text_editor, text_input,
+};
+use iced::{Color, Element, Length, Padding};
 
 use crate::app::{Message, SettingsForm, SiteOption};
 use crate::theme;
@@ -9,18 +11,47 @@ use crate::view::widgets::{
 
 const SITE_OPTIONS: [SiteOption; 2] = [SiteOption::E621, SiteOption::E926];
 
-pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
+pub fn view<'a>(
+    form: &'a SettingsForm,
+    blacklist_content: &'a text_editor::Content,
+) -> Element<'a, Message> {
     let header = page_title(
         "Settings",
-        "Configure credentials, download path, and filters.",
+        "Credentials, destination, and filters apply to every queued download.",
     );
+
+    let status_color = if form.creds_loaded {
+        theme::palette::SUCCESS
+    } else {
+        theme::palette::WARN
+    };
+    let status_label = if form.creds_loaded {
+        "credentials saved"
+    } else {
+        "login required"
+    };
+    let status_panel = container(
+        row![
+            badge(status_label, status_color),
+            text(if form.creds_loaded {
+                "Downloads can start from the Queue page."
+            } else {
+                "Enter your username and API key, then log in once."
+            })
+            .size(12)
+            .style(theme::text_muted),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center),
+    )
+    .style(theme::subtle_panel)
+    .padding(Padding::from([10u16, 14u16]))
+    .width(Length::Fill);
 
     let credentials_card = card(
         column![
             section_title("Credentials"),
-            caption(
-                "Stored in your OS credential store (Credential Manager · Keychain · Secret Service).",
-            ),
+            caption("Saved to the OS credential store after login."),
             field_label("Username"),
             text_input("", &form.username)
                 .on_input(Message::UsernameChanged)
@@ -28,7 +59,7 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
                 .padding(Padding::from([8u16, 12u16]))
                 .size(14),
             field_label("API key"),
-            text_input("", &form.api_key)
+            text_input(api_key_placeholder(form), &form.api_key)
                 .on_input(Message::ApiKeyChanged)
                 .secure(true)
                 .style(theme::text_input_style)
@@ -45,7 +76,7 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
     let site_card = card(
         column![
             section_title("Site"),
-            field_label("Target"),
+            caption("Choose the API host used for searches and login checks."),
             pick_list(&SITE_OPTIONS[..], Some(form.site), Message::SiteChanged,)
                 .padding(Padding::from([8u16, 12u16])),
         ]
@@ -66,7 +97,7 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
                 primary_button("Browse…").on_press(Message::PickFolder),
             ]
             .spacing(10),
-            caption("Files are saved as {query}/{artist}__{md5}.{ext}"),
+            caption("Saved as {query}/{artist}__{md5}.{ext}. Existing MD5s are skipped."),
         ]
         .spacing(8)
         .padding(Padding::from([18u16, 20u16])),
@@ -76,7 +107,9 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
     let rating_card = card(
         column![
             section_title("Rating filter"),
-            caption("If all or none are enabled, no rating filter is applied."),
+            caption(
+                "Choose one or two ratings to narrow results. All or none means no rating filter."
+            ),
             switch("Safe", form.rating_safe, Message::RatingSafe),
             switch(
                 "Questionable",
@@ -93,7 +126,7 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
     let skip_card = card(
         column![
             section_title("Skip media types"),
-            caption("Excluded from every search via -type: filters."),
+            caption("These become negative type filters on every search."),
             switch("Skip videos (.webm)", form.skip_video, Message::SkipVideo),
             switch("Skip flash (.swf)", form.skip_flash, Message::SkipFlash),
             switch(
@@ -110,12 +143,16 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
     let blacklist_card = card(
         column![
             section_title("Blacklist tags"),
-            caption("One tag per line. Leading '-' is optional — negation is added automatically."),
-            text_input("", &form.blacklist)
-                .on_input(Message::BlacklistChanged)
-                .style(theme::text_input_style)
+            caption(
+                "One tag per line. Leading '-' is optional; Feline adds negation automatically."
+            ),
+            text_editor(blacklist_content)
+                .placeholder("young\nanimated\nflash")
+                .on_action(Message::BlacklistEdited)
+                .style(theme::text_editor_style)
                 .padding(Padding::from([8u16, 12u16]))
-                .size(14),
+                .size(14)
+                .height(Length::Fixed(120.0)),
         ]
         .spacing(10)
         .padding(Padding::from([18u16, 20u16])),
@@ -124,6 +161,7 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
 
     let body = column![
         header,
+        status_panel,
         credentials_card,
         site_card,
         folder_card,
@@ -154,7 +192,15 @@ fn credentials_status<'a>(form: &SettingsForm) -> Element<'a, Message> {
             .into();
     }
     if form.creds_loaded {
-        return text("Logged in").size(12).style(theme::text_success).into();
+        return row![
+            badge("Logged in", theme::palette::SUCCESS),
+            text("API key is saved; it is not shown again.")
+                .size(12)
+                .style(theme::text_muted),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center)
+        .into();
     }
     Space::new().height(Length::Fixed(0.0)).into()
 }
@@ -177,4 +223,19 @@ fn credentials_actions<'a>(form: &SettingsForm) -> Element<'a, Message> {
     }
     row_widget = row_widget.push(btn);
     row_widget.into()
+}
+
+fn api_key_placeholder(form: &SettingsForm) -> &str {
+    if form.api_key_saved && form.api_key.is_empty() {
+        "Saved in OS credential store"
+    } else {
+        ""
+    }
+}
+
+fn badge<'a>(label: impl Into<String>, color: Color) -> Element<'a, Message> {
+    container(text(label.into()).size(11))
+        .padding(Padding::from([3u16, 8u16]))
+        .style(theme::badge_tinted(color))
+        .into()
 }

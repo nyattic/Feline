@@ -72,6 +72,12 @@ impl StateStore {
         f(entry);
     }
 
+    pub fn clear_failed(&self, tags: &str) {
+        self.update(tags, |s| {
+            s.failed.clear();
+        });
+    }
+
     pub fn save(&self) -> Result<()> {
         let bytes = {
             let guard = self.inner.lock();

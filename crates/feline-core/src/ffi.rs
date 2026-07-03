@@ -252,7 +252,20 @@ fn scoped_file_path(root: Option<&Path>, raw_path: &str) -> Result<PathBuf, FfiE
             "destination path must be inside the configured cache_dir".into(),
         ));
     }
-    Ok(path)
+    let Some(file_name) = path.file_name() else {
+        return Err(FfiError::InvalidArgument(
+            "destination path must include a file name".into(),
+        ));
+    };
+    let scoped = parent.join(file_name);
+    if let Ok(meta) = std::fs::symlink_metadata(&scoped)
+        && meta.file_type().is_symlink()
+    {
+        return Err(FfiError::InvalidArgument(
+            "destination path must not be a symlink".into(),
+        ));
+    }
+    Ok(scoped)
 }
 
 #[derive(uniffi::Object)]
@@ -496,5 +509,22 @@ mod tests {
 
         assert_eq!(scoped, dest);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_file_path_rejects_symlink_destination() {
+        let root = temp_dir("symlink-root").canonicalize().unwrap();
+        let outside = temp_dir("symlink-outside");
+        let outside_file = outside.join("file.jpg");
+        fs::write(&outside_file, b"outside").unwrap();
+        let link = root.join("link.jpg");
+        std::os::unix::fs::symlink(&outside_file, &link).unwrap();
+
+        let err = scoped_file_path(Some(&root), link.to_str().unwrap()).unwrap_err();
+
+        assert!(matches!(err, FfiError::InvalidArgument(_)));
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
-use iced::widget::{container, row};
+use iced::widget::{container, row, text_editor};
 use iced::{Element, Length, Subscription, Task};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -125,6 +125,7 @@ pub struct JobView {
 pub struct SettingsForm {
     pub username: String,
     pub api_key: String,
+    pub api_key_saved: bool,
     pub creds_loaded: bool,
     pub creds_checking: bool,
     pub creds_error: String,
@@ -146,6 +147,7 @@ pub enum Message {
     StartJob(String),
     RemoveQuery(u64),
     CancelQuery(u64),
+    ClearQueryFailures(u64),
     TogglePauseJob(u64),
 
     UsernameChanged(String),
@@ -160,7 +162,7 @@ pub enum Message {
     SkipVideo(bool),
     SkipFlash(bool),
     SkipAnimation(bool),
-    BlacklistChanged(String),
+    BlacklistEdited(text_editor::Action),
     ConfigSaveTick(u64),
 
     Login,
@@ -193,6 +195,7 @@ pub struct App {
     active_tab: Tab,
     new_query_buf: String,
     settings_form: SettingsForm,
+    blacklist_content: text_editor::Content,
     phase_tick: u8,
 }
 
@@ -212,6 +215,7 @@ impl App {
 
         let state_store = StateStore::load(&StateStore::default_path());
         let settings_form = build_settings_form(&cfg, &creds, creds_loaded, creds_err.as_deref());
+        let blacklist_content = text_editor::Content::with_text(&cfg.blacklist.join("\n"));
 
         let app = Self {
             cfg,
@@ -229,6 +233,7 @@ impl App {
             active_tab: Tab::Queue,
             new_query_buf: String::new(),
             settings_form,
+            blacklist_content,
             phase_tick: 0,
         };
 
@@ -318,6 +323,24 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ClearQueryFailures(id) => {
+                let Some(tags) = self
+                    .cfg
+                    .queries
+                    .iter()
+                    .find(|q| q.id == id)
+                    .map(|q| q.tags.clone())
+                else {
+                    return Task::none();
+                };
+                self.state_store.clear_failed(&tags);
+                if let Err(e) = self.state_store.save() {
+                    self.push_log(LogLevel::Error, format!("state save failed: {e}"));
+                } else {
+                    self.push_log(LogLevel::Info, format!("reset skipped posts: {tags}"));
+                }
+                Task::none()
+            }
             Message::TogglePauseJob(id) => {
                 if let Some(j) = self.jobs.get_mut(&id)
                     && let Some(h) = &j.handle
@@ -338,11 +361,13 @@ impl App {
 
             Message::UsernameChanged(v) => {
                 self.settings_form.username = v.clone();
+                self.settings_form.api_key_saved = false;
                 self.creds.username = v;
                 Task::none()
             }
             Message::ApiKeyChanged(v) => {
                 self.settings_form.api_key = v.clone();
+                self.settings_form.api_key_saved = false;
                 self.creds.api_key = v;
                 Task::none()
             }
@@ -407,14 +432,9 @@ impl App {
                 self.cfg.media_skip.animation = v;
                 self.schedule_save()
             }
-            Message::BlacklistChanged(s) => {
-                self.settings_form.blacklist = s.clone();
-                self.cfg.blacklist = s
-                    .lines()
-                    .map(|l| l.trim().to_string())
-                    .filter(|l| !l.is_empty())
-                    .collect();
-                self.schedule_save()
+            Message::BlacklistEdited(action) => {
+                self.blacklist_content.perform(action);
+                self.update_blacklist(self.blacklist_content.text())
             }
             Message::ConfigSaveTick(token) => {
                 if token == self.save_token {
@@ -451,6 +471,8 @@ impl App {
                             self.creds_loaded_from_store = true;
                             self.creds_store_error = None;
                             self.settings_form.creds_loaded = true;
+                            self.settings_form.api_key.clear();
+                            self.settings_form.api_key_saved = true;
                             self.settings_form.creds_error.clear();
                             self.push_log(
                                 LogLevel::Info,
@@ -479,6 +501,7 @@ impl App {
                 self.creds_store_error = None;
                 self.settings_form.username.clear();
                 self.settings_form.api_key.clear();
+                self.settings_form.api_key_saved = false;
                 self.settings_form.creds_loaded = false;
                 self.settings_form.creds_error.clear();
                 if let Err(e) = crate::credentials::clear() {
@@ -528,7 +551,7 @@ impl App {
                 &self.new_query_buf,
                 self.creds_loaded_from_store,
             ),
-            Tab::Settings => view::settings::view(&self.settings_form),
+            Tab::Settings => view::settings::view(&self.settings_form, &self.blacklist_content),
             Tab::Log => view::log::view(logs),
         };
 
@@ -557,6 +580,12 @@ impl App {
         if let Err(e) = self.cfg.save(&self.cfg_path) {
             self.push_log(LogLevel::Error, format!("config save failed: {e}"));
         }
+    }
+
+    fn update_blacklist(&mut self, text: String) -> Task<Message> {
+        self.settings_form.blacklist = text.clone();
+        self.cfg.blacklist = parse_blacklist(&text);
+        self.schedule_save()
     }
 
     fn push_log(&mut self, level: LogLevel, text: impl Into<String>) {
@@ -817,6 +846,17 @@ impl App {
     }
 }
 
+impl Drop for App {
+    fn drop(&mut self) {
+        for job in self.jobs.values_mut().filter(|j| !j.finished) {
+            if let Some(handle) = job.handle.take() {
+                handle.cancel();
+            }
+        }
+        self.pending_tags.clear();
+    }
+}
+
 fn format_stats(j: &JobState) -> String {
     let speed = format_bps(j.bytes_per_sec);
     match j.phase {
@@ -867,7 +907,12 @@ fn build_settings_form(
 ) -> SettingsForm {
     SettingsForm {
         username: creds.username.clone(),
-        api_key: creds.api_key.clone(),
+        api_key: if creds_loaded {
+            String::new()
+        } else {
+            creds.api_key.clone()
+        },
+        api_key_saved: creds_loaded,
         creds_loaded,
         creds_checking: false,
         creds_error: creds_err.unwrap_or_default().to_string(),
@@ -880,5 +925,153 @@ fn build_settings_form(
         skip_flash: cfg.media_skip.flash,
         skip_animation: cfg.media_skip.animation,
         blacklist: cfg.blacklist.join("\n"),
+    }
+}
+
+fn parse_blacklist(s: &str) -> Vec<String> {
+    s.lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{App, JobPhase, JobState, Message, parse_blacklist};
+    use crate::config::{Config, TagQuery};
+    use crate::download::{DownloadEvent, DownloadManager};
+    use crate::state::StateStore;
+    use std::collections::{HashMap, VecDeque};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    #[test]
+    fn parse_blacklist_trims_and_drops_empty_lines() {
+        assert_eq!(
+            parse_blacklist(" young\n\n -animated \n\tflash\t"),
+            vec!["young", "-animated", "flash"]
+        );
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("feline-app-test-{name}-{}", std::process::id()))
+    }
+
+    fn app_for_test(state_name: &str) -> App {
+        let state_path = temp_path(state_name);
+        let _ = std::fs::remove_file(&state_path);
+        let state_store = StateStore::load(&state_path);
+        let (manager, _rx) =
+            DownloadManager::new(tokio::runtime::Handle::current(), state_store.clone());
+        let cfg = Config {
+            queries: vec![TagQuery {
+                id: 1,
+                tags: "cat".into(),
+                enabled: true,
+            }],
+            ..Config::default()
+        };
+        let creds = crate::credentials::Credentials {
+            username: "user".into(),
+            api_key: "key".into(),
+        };
+        App {
+            cfg: cfg.clone(),
+            cfg_path: temp_path("config"),
+            save_token: 0,
+            creds,
+            creds_loaded_from_store: true,
+            creds_store_error: None,
+            creds_checking: false,
+            state_store,
+            manager: Arc::new(manager),
+            jobs: HashMap::new(),
+            pending_tags: VecDeque::new(),
+            log_lines: VecDeque::new(),
+            active_tab: super::Tab::Queue,
+            new_query_buf: String::new(),
+            settings_form: super::build_settings_form(
+                &cfg,
+                &crate::credentials::Credentials::default(),
+                false,
+                None,
+            ),
+            blacklist_content: iced::widget::text_editor::Content::new(),
+            phase_tick: 0,
+        }
+    }
+
+    fn active_job(tags: &str, phase: JobPhase) -> JobState {
+        JobState {
+            tags: tags.into(),
+            phase,
+            phase_before_pause: None,
+            pages_scanned: 0,
+            total: 0,
+            done: 0,
+            failed: 0,
+            current_file: None,
+            bytes_per_sec: 0,
+            handle: None,
+            discovering: true,
+            finished: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn cancel_query_removes_pending_entry() {
+        let mut app = app_for_test("cancel-pending");
+        app.pending_tags.push_back("cat".into());
+
+        let _ = app.update(Message::CancelQuery(1));
+
+        assert!(app.pending_tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn clear_query_failures_empties_failed_state() {
+        let mut app = app_for_test("clear-failures");
+        app.state_store.update("cat", |s| {
+            s.failed.insert(10);
+            s.failed.insert(20);
+        });
+
+        let _ = app.update(Message::ClearQueryFailures(1));
+
+        assert!(app.state_store.get("cat").failed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pause_and_resume_events_restore_previous_phase() {
+        let mut app = app_for_test("pause-resume");
+        app.jobs.insert(7, active_job("cat", JobPhase::Downloading));
+
+        app.handle_download_event(DownloadEvent::JobPaused { job_id: 7 });
+        assert_eq!(app.jobs.get(&7).unwrap().phase, JobPhase::Paused);
+        assert_eq!(
+            app.jobs.get(&7).unwrap().phase_before_pause,
+            Some(JobPhase::Downloading)
+        );
+
+        app.handle_download_event(DownloadEvent::JobResumed { job_id: 7 });
+        assert_eq!(app.jobs.get(&7).unwrap().phase, JobPhase::Downloading);
+        assert_eq!(app.jobs.get(&7).unwrap().phase_before_pause, None);
+    }
+
+    #[tokio::test]
+    async fn job_error_marks_job_finished_and_releases_handle() {
+        let mut app = app_for_test("job-error");
+        app.jobs.insert(9, active_job("cat", JobPhase::Discovering));
+
+        app.handle_download_event(DownloadEvent::JobError {
+            job_id: 9,
+            error: "network".into(),
+        });
+
+        let job = app.jobs.get(&9).unwrap();
+        assert_eq!(job.phase, JobPhase::Errored);
+        assert!(job.finished);
+        assert!(!job.discovering);
+        assert!(job.handle.is_none());
     }
 }

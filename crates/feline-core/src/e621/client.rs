@@ -18,6 +18,7 @@ const EMULATION_PROFILE: Profile = Profile::Chrome136;
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+pub const MAX_API_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_MEDIA_RESPONSE_BYTES: u64 = 256 * 1024 * 1024;
 
 pub const SESSION_EXPIRED: &str = "Your session expired. Sign in again.";
@@ -213,7 +214,7 @@ impl Client {
 
         let resp = req.send().await?;
         let status = resp.status().as_u16();
-        let bytes = resp.bytes().await?.to_vec();
+        let bytes = read_response_capped(resp, MAX_API_RESPONSE_BYTES).await?;
 
         if status == 403
             && let Ok(text) = std::str::from_utf8(&bytes)
@@ -414,6 +415,25 @@ fn parse_content_length(headers: &wreq::header::HeaderMap) -> Option<u64> {
         .get(wreq::header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
+}
+
+async fn read_response_capped(resp: wreq::Response, max: u64) -> Result<Vec<u8>> {
+    if let Some(length) = parse_content_length(resp.headers())
+        && length > max
+    {
+        anyhow::bail!("response is too large ({length} bytes)");
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("read response chunk")?;
+        if bytes.len() as u64 + chunk.len() as u64 > max {
+            anyhow::bail!("response exceeds cap of {max} bytes");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 fn is_cloudflare_challenge(body: &str) -> bool {

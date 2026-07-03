@@ -1,4 +1,4 @@
-use iced::widget::{button, container, progress_bar, scrollable, text, text_input};
+use iced::widget::{button, container, progress_bar, scrollable, text, text_editor, text_input};
 use iced::{Background, Border, Color, Shadow, Theme, border};
 
 pub mod palette {
@@ -61,8 +61,34 @@ pub fn sidebar(_: &Theme) -> container::Style {
 pub fn card(_: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(palette::SURFACE_CONTAINER)),
-        border: border::rounded(16),
+        border: border::rounded(8),
         text_color: Some(palette::TEXT),
+        ..Default::default()
+    }
+}
+
+pub fn subtle_panel(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(palette::SURFACE_CONTAINER_HIGH)),
+        border: Border {
+            color: palette::OUTLINE_VARIANT,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        text_color: Some(palette::TEXT),
+        ..Default::default()
+    }
+}
+
+pub fn badge_tinted(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(with_alpha(color, 0.16))),
+        border: Border {
+            color: with_alpha(color, 0.45),
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        text_color: Some(color),
         ..Default::default()
     }
 }
@@ -165,6 +191,24 @@ pub fn text_input_style(theme: &Theme, status: text_input::Status) -> text_input
     base
 }
 
+pub fn text_editor_style(theme: &Theme, status: text_editor::Status) -> text_editor::Style {
+    let default = text_editor::default(theme, status);
+    text_editor::Style {
+        background: Background::Color(palette::SURFACE_CONTAINER_HIGH),
+        border: Border {
+            color: match status {
+                text_editor::Status::Focused { .. } => palette::PRIMARY,
+                _ => palette::OUTLINE_VARIANT,
+            },
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        placeholder: palette::TEXT_MUTED,
+        value: palette::TEXT,
+        selection: default.selection,
+    }
+}
+
 pub fn progress_style(_: &Theme) -> progress_bar::Style {
     progress_bar::Style {
         background: Background::Color(palette::SURFACE_CONTAINER_HIGH),
@@ -192,12 +236,6 @@ pub fn text_warn(_: &Theme) -> text::Style {
 pub fn text_danger(_: &Theme) -> text::Style {
     text::Style {
         color: Some(palette::DANGER),
-    }
-}
-
-pub fn text_success(_: &Theme) -> text::Style {
-    text::Style {
-        color: Some(palette::SUCCESS),
     }
 }
 

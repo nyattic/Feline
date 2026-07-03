@@ -341,7 +341,14 @@ async fn run_job(
     } = runtime;
     let client = Client::with_limiter(cfg.site, creds.clone(), limiter, None).await?;
     let download_root = cfg.download_dir.clone();
-    tokio::fs::create_dir_all(&download_root).await.ok();
+    tokio::fs::create_dir_all(&download_root)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "create download directory `{}`: {e}",
+                download_root.display()
+            )
+        })?;
 
     let md5_index = tokio::task::spawn_blocking({
         let root = download_root.clone();
