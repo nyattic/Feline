@@ -10,7 +10,10 @@ use crate::view::widgets::{
 const SITE_OPTIONS: [SiteOption; 2] = [SiteOption::E621, SiteOption::E926];
 
 pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
-    let header = page_title("Settings", "Configure credentials, download path, and filters.");
+    let header = page_title(
+        "Settings",
+        "Configure credentials, download path, and filters.",
+    );
 
     let credentials_card = card(
         column![
@@ -43,12 +46,8 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
         column![
             section_title("Site"),
             field_label("Target"),
-            pick_list(
-                &SITE_OPTIONS[..],
-                Some(form.site),
-                Message::SiteChanged,
-            )
-            .padding(Padding::from([8u16, 12u16])),
+            pick_list(&SITE_OPTIONS[..], Some(form.site), Message::SiteChanged,)
+                .padding(Padding::from([8u16, 12u16])),
         ]
         .spacing(10)
         .padding(Padding::from([18u16, 20u16])),
@@ -131,7 +130,7 @@ pub fn view<'a>(form: &'a SettingsForm) -> Element<'a, Message> {
         rating_card,
         skip_card,
         blacklist_card,
-        Space::with_height(Length::Fixed(20.0)),
+        Space::new().height(Length::Fixed(20.0)),
     ]
     .spacing(16);
 
@@ -157,11 +156,11 @@ fn credentials_status<'a>(form: &SettingsForm) -> Element<'a, Message> {
     if form.creds_loaded {
         return text("Logged in").size(12).style(theme::text_success).into();
     }
-    Space::with_height(Length::Fixed(0.0)).into()
+    Space::new().height(Length::Fixed(0.0)).into()
 }
 
 fn credentials_actions<'a>(form: &SettingsForm) -> Element<'a, Message> {
-    let mut row_widget = row![Space::with_width(Length::Fill)].spacing(8);
+    let mut row_widget = row![Space::new().width(Length::Fill)].spacing(8);
 
     if form.creds_loaded {
         row_widget = row_widget.push(link_button("Log out").on_press(Message::Logout));
@@ -173,10 +172,7 @@ fn credentials_actions<'a>(form: &SettingsForm) -> Element<'a, Message> {
         "Log in"
     };
     let mut btn = primary_button(login_label);
-    if !form.creds_checking
-        && !form.username.trim().is_empty()
-        && !form.api_key.trim().is_empty()
-    {
+    if !form.creds_checking && !form.username.trim().is_empty() && !form.api_key.trim().is_empty() {
         btn = btn.on_press(Message::Login);
     }
     row_widget = row_widget.push(btn);

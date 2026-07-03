@@ -14,11 +14,13 @@ pub fn view<'a>(logs: Vec<LogLine>) -> Element<'a, Message> {
 
     let body: Element<Message> = if logs.is_empty() {
         card(
-            column![text("No log output yet.")
-                .size(13)
-                .style(theme::text_muted)
-                .width(Length::Fill)
-                .align_x(iced::Alignment::Center)]
+            column![
+                text("No log output yet.")
+                    .size(13)
+                    .style(theme::text_muted)
+                    .width(Length::Fill)
+                    .align_x(iced::Alignment::Center)
+            ]
             .width(Length::Fill)
             .padding(Padding::from([24u16, 0u16])),
         )

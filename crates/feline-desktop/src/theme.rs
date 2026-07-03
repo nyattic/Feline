@@ -30,12 +30,13 @@ pub mod palette {
 
 pub fn build() -> Theme {
     Theme::custom(
-        "Feline".into(),
+        "Feline",
         iced::theme::Palette {
             background: palette::BG,
             text: palette::TEXT,
             primary: palette::PRIMARY,
             success: palette::SUCCESS,
+            warning: palette::WARN,
             danger: palette::DANGER,
         },
     )
@@ -79,15 +80,12 @@ pub fn primary_button(_: &Theme, status: button::Status) -> button::Style {
         text_color: palette::ON_PRIMARY,
         border: border::rounded(20),
         shadow: Shadow::default(),
+        ..Default::default()
     };
     match status {
         button::Status::Active => base,
         button::Status::Hovered => button::Style {
-            background: Some(Background::Color(mix(
-                palette::PRIMARY,
-                Color::WHITE,
-                0.08,
-            ))),
+            background: Some(Background::Color(mix(palette::PRIMARY, Color::WHITE, 0.08))),
             ..base
         },
         button::Status::Pressed => button::Style {
@@ -108,6 +106,7 @@ pub fn link_button(_: &Theme, status: button::Status) -> button::Style {
         text_color: palette::PRIMARY,
         border: border::rounded(20),
         shadow: Shadow::default(),
+        ..Default::default()
     };
     match status {
         button::Status::Hovered | button::Status::Pressed => button::Style {
@@ -136,9 +135,14 @@ pub fn nav_button(active: bool) -> impl Fn(&Theme, button::Status) -> button::St
         };
         button::Style {
             background: bg,
-            text_color: if active { palette::TEXT } else { palette::TEXT_MUTED },
+            text_color: if active {
+                palette::TEXT
+            } else {
+                palette::TEXT_MUTED
+            },
             border: border::rounded(20),
             shadow: Shadow::default(),
+            ..Default::default()
         }
     }
 }
@@ -148,7 +152,7 @@ pub fn text_input_style(theme: &Theme, status: text_input::Status) -> text_input
     base.background = Background::Color(palette::SURFACE_CONTAINER_HIGH);
     base.border = Border {
         color: match status {
-            text_input::Status::Focused => palette::PRIMARY,
+            text_input::Status::Focused { .. } => palette::PRIMARY,
             _ => palette::OUTLINE_VARIANT,
         },
         width: 1.0,

@@ -47,11 +47,14 @@ pub fn view<'a>(
             let matched: Vec<JobView> = jobs.iter().filter(|j| j.tags == q.tags).cloned().collect();
             list = list.push(query_card(q, matched, logged_in));
         }
-        scrollable(list.padding(Padding::from([0u16, 4u16])).width(Length::Fill))
-            .style(theme::scroller)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        scrollable(
+            list.padding(Padding::from([0u16, 4u16]))
+                .width(Length::Fill),
+        )
+        .style(theme::scroller)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     };
 
     container(
@@ -86,7 +89,11 @@ fn empty_state<'a>() -> Element<'a, Message> {
     .into()
 }
 
-fn query_card<'a>(q: QueryView, matched_jobs: Vec<JobView>, logged_in: bool) -> Element<'a, Message> {
+fn query_card<'a>(
+    q: QueryView,
+    matched_jobs: Vec<JobView>,
+    logged_in: bool,
+) -> Element<'a, Message> {
     let id = q.id;
     let tags_owned = q.tags.clone();
     let running = q.running;
@@ -114,30 +121,26 @@ fn query_card<'a>(q: QueryView, matched_jobs: Vec<JobView>, logged_in: bool) -> 
     let mut body = column![header].spacing(0);
 
     if queued {
-        body = body
-            .push(Space::with_height(Length::Fixed(4.0)))
-            .push(
-                text("queued — waiting for the active job")
-                    .size(12)
-                    .style(theme::text_warn),
-            );
+        body = body.push(Space::new().height(Length::Fixed(4.0))).push(
+            text("queued — waiting for the active job")
+                .size(12)
+                .style(theme::text_warn),
+        );
     }
 
     if failed_count > 0 {
-        body = body
-            .push(Space::with_height(Length::Fixed(4.0)))
-            .push(
-                text(format!("{failed_count} permanently skipped"))
-                    .size(12)
-                    .style(theme::text_muted),
-            );
+        body = body.push(Space::new().height(Length::Fixed(4.0))).push(
+            text(format!("{failed_count} permanently skipped"))
+                .size(12)
+                .style(theme::text_muted),
+        );
     }
 
     for job in matched_jobs {
         body = body
-            .push(Space::with_height(Length::Fixed(10.0)))
+            .push(Space::new().height(Length::Fixed(10.0)))
             .push(divider())
-            .push(Space::with_height(Length::Fixed(10.0)))
+            .push(Space::new().height(Length::Fixed(10.0)))
             .push(job_row(job));
     }
 
@@ -155,15 +158,15 @@ fn job_row<'a>(job: JobView) -> Element<'a, Message> {
         _ => theme::palette::PRIMARY,
     };
     let phase_label = format!("{}{}", job.phase_label, job.phase_dots);
-    let phase_text = text(phase_label).size(12).style(move |_| {
-        iced::widget::text::Style {
+    let phase_text = text(phase_label)
+        .size(12)
+        .style(move |_| iced::widget::text::Style {
             color: Some(phase_color),
-        }
-    });
+        });
 
     let stats = text(job.stats_label).size(12).style(theme::text_muted);
 
-    let mut header = row![phase_text, Space::with_width(Length::Fill), stats]
+    let mut header = row![phase_text, Space::new().width(Length::Fill), stats]
         .spacing(8)
         .align_y(iced::Alignment::Center);
 
@@ -173,7 +176,7 @@ fn job_row<'a>(job: JobView) -> Element<'a, Message> {
     }
 
     let bar = progress_bar(0.0..=1.0, job.progress)
-        .height(Length::Fixed(8.0))
+        .girth(Length::Fixed(8.0))
         .style(theme::progress_style);
 
     let mut body = column![header, bar].spacing(6);

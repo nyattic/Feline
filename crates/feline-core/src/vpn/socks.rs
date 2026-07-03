@@ -35,7 +35,10 @@ pub struct SocksHandle {
 
 impl SocksHandle {
     pub fn proxy_url(&self) -> String {
-        format!("socks5h://{SOCKS_USER}:{}@{}", self.auth_token, self.local_addr)
+        format!(
+            "socks5h://{SOCKS_USER}:{}@{}",
+            self.auth_token, self.local_addr
+        )
     }
 
     pub fn proxy_display_url(&self) -> String {

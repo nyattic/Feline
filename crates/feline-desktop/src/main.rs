@@ -12,7 +12,7 @@ mod state;
 mod theme;
 mod view;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use iced::window;
@@ -35,24 +35,37 @@ fn main() -> Result<()> {
     let manager = Arc::new(manager);
     let manager_for_boot = manager.clone();
 
-    let mut events_rx = Some(events_rx);
-    let mut manager_for_boot = Some(manager_for_boot);
+    let events_rx = Mutex::new(Some(events_rx));
+    let manager_for_boot = Mutex::new(Some(manager_for_boot));
 
-    iced::application(App::title, App::update, App::view)
-        .subscription(App::subscription)
-        .theme(App::theme)
-        .window(window::Settings {
-            size: iced::Size::new(1100.0, 720.0),
-            min_size: Some(iced::Size::new(800.0, 500.0)),
-            ..Default::default()
-        })
-        .run_with(move || {
+    iced::application(
+        move || {
             App::boot(
-                events_rx.take().expect("boot called twice"),
-                manager_for_boot.take().expect("boot called twice"),
+                events_rx
+                    .lock()
+                    .expect("events receiver lock poisoned")
+                    .take()
+                    .expect("boot called twice"),
+                manager_for_boot
+                    .lock()
+                    .expect("manager lock poisoned")
+                    .take()
+                    .expect("boot called twice"),
             )
-        })
-        .map_err(|e| anyhow::anyhow!("iced run: {e}"))?;
+        },
+        App::update,
+        App::view,
+    )
+    .title(App::title)
+    .subscription(App::subscription)
+    .theme(App::theme)
+    .window(window::Settings {
+        size: iced::Size::new(1100.0, 720.0),
+        min_size: Some(iced::Size::new(800.0, 500.0)),
+        ..Default::default()
+    })
+    .run()
+    .map_err(|e| anyhow::anyhow!("iced run: {e}"))?;
 
     drop(manager);
     drop(runtime);

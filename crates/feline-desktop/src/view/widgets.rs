@@ -16,11 +16,7 @@ pub fn page_title<'a, Message: 'a>(title: &str, subtitle: &str) -> Element<'a, M
         .spacing(4)
         .width(Length::Fill);
     if !subtitle.is_empty() {
-        col = col.push(
-            text(subtitle.to_string())
-                .size(13)
-                .style(theme::text_muted),
-        );
+        col = col.push(text(subtitle.to_string()).size(13).style(theme::text_muted));
     }
     col.into()
 }
@@ -30,7 +26,10 @@ pub fn section_title<'a, Message: 'a>(label: &str) -> Element<'a, Message> {
 }
 
 pub fn caption<'a, Message: 'a>(label: &str) -> Element<'a, Message> {
-    text(label.to_string()).size(12).style(theme::text_muted).into()
+    text(label.to_string())
+        .size(12)
+        .style(theme::text_muted)
+        .into()
 }
 
 pub fn field_label<'a, Message: 'a>(label: &str) -> Element<'a, Message> {
@@ -50,7 +49,7 @@ pub fn link_button<'a, Message: Clone + 'a>(label: &str) -> Button<'a, Message> 
 }
 
 pub fn divider<'a, Message: 'a>() -> Element<'a, Message> {
-    container(iced::widget::Space::with_height(Length::Fixed(1.0)))
+    container(iced::widget::Space::new().height(Length::Fixed(1.0)))
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(theme::divider)
@@ -62,7 +61,8 @@ pub fn switch<'a, Message: Clone + 'a>(
     checked: bool,
     on_toggle: impl Fn(bool) -> Message + 'a,
 ) -> Element<'a, Message> {
-    iced::widget::checkbox(label.to_string(), checked)
+    iced::widget::checkbox(checked)
+        .label(label.to_string())
         .on_toggle(on_toggle)
         .text_size(13)
         .size(20)

@@ -33,7 +33,9 @@ pub fn view<'a>(active_tab: Tab, active_jobs: u32) -> Element<'a, Message> {
         row![
             text("●")
                 .size(10)
-                .style(move |_| iced::widget::text::Style { color: Some(dot_color) }),
+                .style(move |_| iced::widget::text::Style {
+                    color: Some(dot_color)
+                }),
             text(status_label).size(12).style(theme::text_muted),
         ]
         .spacing(6),
@@ -48,7 +50,7 @@ pub fn view<'a>(active_tab: Tab, active_jobs: u32) -> Element<'a, Message> {
     });
 
     container(
-        column![title, nav, Space::with_height(Length::Fill), status]
+        column![title, nav, Space::new().height(Length::Fill), status]
             .spacing(4)
             .padding(Padding::from([20u16, 12u16])),
     )

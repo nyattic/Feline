@@ -815,7 +815,6 @@ impl App {
             paused: j.phase == JobPhase::Paused,
         }
     }
-
 }
 
 fn format_stats(j: &JobState) -> String {

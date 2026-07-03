@@ -1,9 +1,10 @@
 use anyhow::{Context, Result, anyhow};
+use futures_util::StreamExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use wreq::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, USER_AGENT};
-use wreq_util::Emulation;
+use wreq_util::Profile;
 
 use super::rate_limit::{ApiLimiter, new_api_limiter};
 use super::types::{Post, PostsResponse};
@@ -13,7 +14,7 @@ use crate::media_cache::{self, MAX_CACHE_BYTES};
 use crate::util::safe_truncate;
 
 const MAX_LIMIT: u32 = 320;
-const EMULATION_PROFILE: Emulation = Emulation::Chrome136;
+const EMULATION_PROFILE: Profile = Profile::Chrome136;
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
@@ -263,9 +264,10 @@ impl Client {
             anyhow::bail!("media response is too large ({length} bytes)");
         }
 
-        let mut resp = resp;
+        let mut stream = resp.bytes_stream();
         let mut bytes: Vec<u8> = Vec::new();
-        while let Some(chunk) = resp.chunk().await.context("read media chunk")? {
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("read media chunk")?;
             if bytes.len() as u64 + chunk.len() as u64 > MAX_MEDIA_RESPONSE_BYTES {
                 anyhow::bail!("media response exceeds cap of {MAX_MEDIA_RESPONSE_BYTES} bytes");
             }
@@ -303,7 +305,7 @@ impl Client {
             req = self.apply_auth(req);
         }
 
-        let mut resp = req.send().await.context("send media request")?;
+        let resp = req.send().await.context("send media request")?;
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
             return Ok(status);
@@ -322,7 +324,9 @@ impl Client {
             .context("create destination file")?;
         let mut hasher = expected_md5.as_ref().map(|_| Md5::new());
         let mut total: u64 = 0;
-        while let Some(chunk) = resp.chunk().await.context("read media chunk")? {
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("read media chunk")?;
             total = total.saturating_add(chunk.len() as u64);
             if total > MAX_DOWNLOAD_BYTES {
                 drop(file);

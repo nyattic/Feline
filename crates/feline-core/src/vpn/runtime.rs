@@ -118,8 +118,14 @@ pub async fn start(cfg: WgConfig) -> Result<EngineHandle> {
     let handshake_age_for_task = handshake_age_ms.clone();
 
     let task = tokio::spawn(async move {
-        if let Err(err) =
-            run_engine(prepared, cmd_rx, shutdown_rx, cmd_tx_clone, handshake_age_for_task).await
+        if let Err(err) = run_engine(
+            prepared,
+            cmd_rx,
+            shutdown_rx,
+            cmd_tx_clone,
+            handshake_age_for_task,
+        )
+        .await
         {
             tracing::error!(error = %format!("{err:#}"), "vpn engine exited with error");
         }
@@ -730,8 +736,9 @@ mod tests {
     #[test]
     fn allocate_port_skips_ports_in_use() {
         let mut next = EPHEMERAL_PORT_BASE;
-        let in_use: HashSet<u16> =
-            [EPHEMERAL_PORT_BASE, EPHEMERAL_PORT_BASE + 1].into_iter().collect();
+        let in_use: HashSet<u16> = [EPHEMERAL_PORT_BASE, EPHEMERAL_PORT_BASE + 1]
+            .into_iter()
+            .collect();
         let port = allocate_port(&mut next, &in_use).unwrap();
         assert_eq!(port, EPHEMERAL_PORT_BASE + 2);
     }
@@ -740,8 +747,14 @@ mod tests {
     fn allocate_port_wraps_around() {
         let mut next = EPHEMERAL_PORT_END;
         let empty = HashSet::new();
-        assert_eq!(allocate_port(&mut next, &empty).unwrap(), EPHEMERAL_PORT_END);
-        assert_eq!(allocate_port(&mut next, &empty).unwrap(), EPHEMERAL_PORT_BASE);
+        assert_eq!(
+            allocate_port(&mut next, &empty).unwrap(),
+            EPHEMERAL_PORT_END
+        );
+        assert_eq!(
+            allocate_port(&mut next, &empty).unwrap(),
+            EPHEMERAL_PORT_BASE
+        );
     }
 
     #[test]

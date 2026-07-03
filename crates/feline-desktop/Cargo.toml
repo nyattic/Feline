@@ -20,7 +20,7 @@ long_description = "A native desktop downloader for e621 and e926 tag searches."
 
 [dependencies]
 feline-core = { path = "../feline-core" }
-iced = { version = "0.13.1", features = ["tokio", "advanced", "image"] }
+iced = { version = "0.14.0", features = ["tokio", "advanced", "image"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 tokio-stream = { workspace = true, features = ["sync"] }
 futures = "0.3.32"
@@ -29,7 +29,7 @@ wreq = { workspace = true }
 url = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+keyring = { version = "4.1.2", features = ["apple-native-keyring-store", "windows-native-keyring-store", "zbus-secret-service-keyring-store"] }
 md-5 = { workspace = true }
 hex = { workspace = true }
 governor = { workspace = true }
