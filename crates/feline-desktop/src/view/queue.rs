@@ -192,8 +192,9 @@ fn query_card<'a>(
     let display_tags = compact_middle(&q.tags, TAG_DISPLAY_CHARS);
     let title = column![
         row![
-            text(display_tags).size(16).width(Length::Fill),
+            text(display_tags).size(16),
             badge(status_label, status_color),
+            Space::new().width(Length::Fill),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center),

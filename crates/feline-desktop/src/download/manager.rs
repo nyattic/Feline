@@ -376,17 +376,9 @@ async fn run_job(
         post_tx,
     )));
 
-    let mut progress = ProgressState {
-        done: 0,
-        failed: 0,
-        bytes_in_window: 0,
-        window_start: Instant::now(),
-    };
-    let mut futs: FuturesUnordered<BoxFuture<'static, DownloadOutcome>> = FuturesUnordered::new();
-    let mut dispatched: usize = 0;
+    let mut posts = Vec::new();
     let mut channel_open = true;
-
-    loop {
+    while channel_open {
         if wait_while_paused(job_id, &control, &events).await {
             if let Some(handle) = discovery.take() {
                 handle.abort();
@@ -396,50 +388,78 @@ async fn run_job(
             return Ok(());
         }
 
-        if !channel_open && let Some(handle) = discovery.take() {
-            let summary = handle.await.unwrap_or_default();
-            if let Some(err) = summary.error {
-                let _ = state.save();
-                let _ = events.send(DownloadEvent::JobError { job_id, error: err });
-                return Ok(());
-            }
-            if !summary.cancelled {
-                let _ = events.send(DownloadEvent::DiscoveryDone {
-                    job_id,
-                    total_posts: summary.total,
-                    skipped_existing: summary.skipped_existing,
-                    skipped_failed: summary.skipped_failed,
-                });
+        loop {
+            match post_rx.try_recv() {
+                Ok(post) => posts.push(post),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    channel_open = false;
+                    break;
+                }
             }
         }
 
-        while channel_open && futs.len() < CONCURRENT_DOWNLOADS {
-            match post_rx.try_recv() {
-                Ok(post) => {
-                    dispatched += 1;
-                    futs.push(spawn_download(post, &http, &download_root, &tags, &control));
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => channel_open = false,
-            }
+        if !channel_open {
+            break;
+        }
+
+        tokio::select! {
+            biased;
+            _ = control.wake.notified() => {}
+            maybe = post_rx.recv() => match maybe {
+                Some(post) => posts.push(post),
+                None => channel_open = false,
+            },
+        }
+    }
+
+    if let Some(handle) = discovery.take() {
+        let summary = handle.await.unwrap_or_default();
+        if let Some(err) = summary.error {
+            let _ = state.save();
+            let _ = events.send(DownloadEvent::JobError { job_id, error: err });
+            return Ok(());
+        }
+        if summary.cancelled {
+            let _ = state.save();
+            let _ = events.send(DownloadEvent::JobCancelled { job_id });
+            return Ok(());
+        }
+        let _ = events.send(DownloadEvent::DiscoveryDone {
+            job_id,
+            total_posts: summary.total,
+            skipped_existing: summary.skipped_existing,
+            skipped_failed: summary.skipped_failed,
+        });
+    }
+
+    let mut progress = ProgressState {
+        done: 0,
+        failed: 0,
+        bytes_in_window: 0,
+        window_start: Instant::now(),
+    };
+    let mut futs: FuturesUnordered<BoxFuture<'static, DownloadOutcome>> = FuturesUnordered::new();
+    let mut dispatched: usize = 0;
+    let mut pending_posts = posts.into_iter();
+
+    loop {
+        if wait_while_paused(job_id, &control, &events).await {
+            let _ = state.save();
+            let _ = events.send(DownloadEvent::JobCancelled { job_id });
+            return Ok(());
+        }
+
+        while futs.len() < CONCURRENT_DOWNLOADS {
+            let Some(post) = pending_posts.next() else {
+                break;
+            };
+            dispatched += 1;
+            futs.push(spawn_download(post, &http, &download_root, &tags, &control));
         }
 
         if futs.is_empty() {
-            if !channel_open {
-                break;
-            }
-            tokio::select! {
-                biased;
-                _ = control.wake.notified() => {}
-                maybe = post_rx.recv() => match maybe {
-                    Some(post) => {
-                        dispatched += 1;
-                        futs.push(spawn_download(post, &http, &download_root, &tags, &control));
-                    }
-                    None => channel_open = false,
-                },
-            }
-            continue;
+            break;
         }
 
         tokio::select! {
@@ -450,15 +470,6 @@ async fn run_job(
                     handle_download_outcome(
                         outcome, job_id, &tags, &state, &md5_index, &events, &mut progress,
                     );
-                }
-            }
-            maybe = post_rx.recv(), if channel_open && futs.len() < CONCURRENT_DOWNLOADS => {
-                match maybe {
-                    Some(post) => {
-                        dispatched += 1;
-                        futs.push(spawn_download(post, &http, &download_root, &tags, &control));
-                    }
-                    None => channel_open = false,
                 }
             }
         }

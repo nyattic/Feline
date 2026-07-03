@@ -759,6 +759,8 @@ impl App {
                     j.phase_before_pause = None;
                     j.finished = true;
                     j.discovering = false;
+                    j.current_file = None;
+                    j.bytes_per_sec = 0;
                     j.handle = None;
                 }
                 self.push_log(LogLevel::Warn, "cancelled");
@@ -786,6 +788,8 @@ impl App {
                     j.phase = JobPhase::Errored;
                     j.finished = true;
                     j.discovering = false;
+                    j.current_file = None;
+                    j.bytes_per_sec = 0;
                     j.handle = None;
                 }
                 self.push_log(LogLevel::Error, format!("error: {error}"));
@@ -829,7 +833,11 @@ impl App {
                 (j.done as f32 / j.total as f32).clamp(0.0, 1.0)
             }
             JobPhase::Downloading | JobPhase::Paused => 0.0,
-            JobPhase::Finished | JobPhase::Cancelled | JobPhase::Errored => 1.0,
+            JobPhase::Finished => 1.0,
+            JobPhase::Cancelled | JobPhase::Errored if j.total > 0 => {
+                (j.done as f32 / j.total as f32).clamp(0.0, 1.0)
+            }
+            JobPhase::Cancelled | JobPhase::Errored => 0.0,
         };
         JobView {
             id,
