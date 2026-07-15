@@ -25,7 +25,7 @@ A native desktop downloader for e621 and e926 tag searches.
 
 Files are saved as `{query}/{artist}__{md5}.{ext}` under the chosen folder.
 
-Media cache operations exposed through the core library are limited to cache directories created by Feline, and direct file downloads through the FFI layer must target that configured cache directory.
+Media cache operations exposed through the FFI layer are limited to cache directories created by Feline, and direct file downloads through that layer must target the configured cache directory. These checks live at the FFI boundary. The underlying `feline-core` functions take arbitrary paths and enforce no scoping of their own, so embedders that call the library directly are responsible for validating the paths they pass.
 
 ## Network Access
 
