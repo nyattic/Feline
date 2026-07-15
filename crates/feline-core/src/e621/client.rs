@@ -246,6 +246,7 @@ impl Client {
 
         let mut req = self.api_http.get(parsed.as_str());
         if host_accepts_credentials(&host, self.site.credential_domains()) {
+            self.limiter.until_ready().await;
             req = self.apply_auth(req);
         }
 
@@ -295,6 +296,7 @@ impl Client {
 
         let mut req = self.api_http.get(parsed.as_str());
         if host_accepts_credentials(&host, self.site.credential_domains()) {
+            self.limiter.until_ready().await;
             req = self.apply_auth(req);
         }
 

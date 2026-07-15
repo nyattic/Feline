@@ -39,6 +39,29 @@ pub enum DownloadError {
     Other(#[from] anyhow::Error),
 }
 
+struct TmpFileGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TmpFileGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TmpFileGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 pub fn target_path(root: &Path, tags: &str, post: &Post) -> PathBuf {
     let folder = sanitize_path_component(tags);
     let artist = sanitize_path_component(post.primary_artist());
@@ -82,6 +105,7 @@ pub async fn download_post(
     }
 
     let tmp_path = final_path.with_extension(format!("{}.part", post.file.ext));
+    let mut tmp_guard = TmpFileGuard::new(tmp_path.clone());
 
     let backoff = ExponentialBuilder::default()
         .with_min_delay(Duration::from_millis(500))
@@ -127,20 +151,12 @@ pub async fn download_post(
         })
         .await;
 
-    if let Err(err) = result {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return Err(err);
-    }
-
-    if final_path.exists() {
-        tokio::fs::remove_file(&final_path)
-            .await
-            .map_err(|e| DownloadError::Other(anyhow!("remove invalid final file: {e}")))?;
-    }
+    result?;
 
     tokio::fs::rename(&tmp_path, &final_path)
         .await
         .map_err(|e| DownloadError::Other(anyhow!("rename tmp to final: {e}")))?;
+    tmp_guard.disarm();
 
     Ok(final_path)
 }
@@ -245,6 +261,9 @@ async fn stream_to_file_verified(
     file.flush()
         .await
         .map_err(|e| DownloadError::Other(anyhow!("flush: {e}")))?;
+    file.sync_all()
+        .await
+        .map_err(|e| DownloadError::Other(anyhow!("sync tmp file: {e}")))?;
     drop(file);
 
     if bytes_written != expected_size {
@@ -301,11 +320,59 @@ impl DownloadError {
 
 #[cfg(test)]
 mod tests {
-    use super::{existing_file_is_valid, validate_file_url};
+    use super::{TmpFileGuard, existing_file_is_valid, validate_file_url};
     use std::path::PathBuf;
 
     fn temp_file(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("feline-worker-test-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn armed_guard_removes_tmp_file_on_drop() {
+        let path = temp_file("guard-armed");
+        std::fs::write(&path, b"partial").unwrap();
+
+        drop(TmpFileGuard::new(path.clone()));
+
+        assert!(!path.exists(), "armed guard must remove the tmp file");
+    }
+
+    #[test]
+    fn disarmed_guard_leaves_file_in_place() {
+        let path = temp_file("guard-disarmed");
+        std::fs::write(&path, b"final").unwrap();
+
+        let mut guard = TmpFileGuard::new(path.clone());
+        guard.disarm();
+        drop(guard);
+
+        assert!(path.exists(), "disarmed guard must not remove the file");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn dropping_future_mid_await_removes_tmp_file() {
+        let path = temp_file("guard-cancelled-future");
+        std::fs::write(&path, b"partial").unwrap();
+
+        let mut fut = Box::pin({
+            let path = path.clone();
+            async move {
+                let _guard = TmpFileGuard::new(path);
+                std::future::pending::<()>().await;
+            }
+        });
+
+        let poll = futures::poll!(fut.as_mut());
+        assert!(poll.is_pending(), "future must park while holding the guard");
+        assert!(path.exists(), "tmp file survives while the future is alive");
+
+        drop(fut);
+
+        assert!(
+            !path.exists(),
+            "dropping the future mid-await must remove the tmp file"
+        );
     }
 
     #[test]

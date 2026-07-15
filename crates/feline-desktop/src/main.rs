@@ -31,12 +31,13 @@ fn main() -> Result<()> {
     let rt_handle = runtime.handle().clone();
 
     let state_store = StateStore::load(&StateStore::default_path());
-    let (manager, events_rx) = DownloadManager::new(rt_handle, state_store);
+    let (manager, events_rx) = DownloadManager::new(rt_handle, state_store.clone());
     let manager = Arc::new(manager);
     let manager_for_boot = manager.clone();
 
     let events_rx = Mutex::new(Some(events_rx));
     let manager_for_boot = Mutex::new(Some(manager_for_boot));
+    let state_store_for_boot = Mutex::new(Some(state_store));
 
     iced::application(
         move || {
@@ -49,6 +50,11 @@ fn main() -> Result<()> {
                 manager_for_boot
                     .lock()
                     .expect("manager lock poisoned")
+                    .take()
+                    .expect("boot called twice"),
+                state_store_for_boot
+                    .lock()
+                    .expect("state store lock poisoned")
                     .take()
                     .expect("boot called twice"),
             )

@@ -51,6 +51,9 @@ pub fn is_cacheable_url(url: &str) -> bool {
 
 pub fn read(dir: &Path, url: &str) -> Option<Vec<u8>> {
     let path = dir.join(key(url));
+    if !fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file()) {
+        return None;
+    }
     let bytes = fs::read(&path).ok()?;
     if let Ok(file) = fs::OpenOptions::new().write(true).open(&path) {
         let _ = file.set_modified(SystemTime::now());
@@ -79,8 +82,8 @@ pub fn size(dir: &Path) -> u64 {
     entries
         .flatten()
         .filter_map(|entry| {
-            let meta = entry.metadata().ok()?;
-            if !meta.is_file() {
+            let meta = fs::symlink_metadata(entry.path()).ok()?;
+            if !meta.file_type().is_file() {
                 return None;
             }
             let name = entry.file_name();
@@ -118,10 +121,10 @@ fn enforce_cap(dir: &Path, max: u64) {
     let mut files: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
     let mut total: u64 = 0;
     for entry in entries.flatten() {
-        let Ok(meta) = entry.metadata() else {
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
             continue;
         };
-        if !meta.is_file() {
+        if !meta.file_type().is_file() {
             continue;
         }
         let name = entry.file_name();
@@ -150,6 +153,26 @@ fn enforce_cap(dir: &Path, max: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn read_refuses_to_follow_symlink_out_of_cache() {
+        let dir = temp_dir();
+        prepare_dir(&dir).unwrap();
+
+        let secret = dir.join("secret-outside-cache");
+        fs::write(&secret, b"private key material").unwrap();
+
+        let url = "https://static1.e621.net/data/aa/bb/deadbeef.jpg";
+        std::os::unix::fs::symlink(&secret, dir.join(key(url))).unwrap();
+
+        assert!(
+            read(&dir, url).is_none(),
+            "cache read must not follow a symlink to a file it did not write"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

@@ -1,4 +1,12 @@
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+pub fn write_file_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
 
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn exe_dir() -> PathBuf {

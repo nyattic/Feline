@@ -639,3 +639,69 @@ fn compute_bps(window_start: &mut Instant, bytes_in_window: &mut u64) -> u64 {
     *bytes_in_window = 0;
     bps
 }
+
+#[cfg(test)]
+mod tests {
+    use super::JobControl;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const WAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+    async fn spawn_waiter(control: Arc<JobControl>) -> tokio::task::JoinHandle<bool> {
+        let started = Arc::new(tokio::sync::Barrier::new(2));
+        let handle = {
+            let started = started.clone();
+            tokio::spawn(async move {
+                started.wait().await;
+                control.wait_if_paused().await
+            })
+        };
+        started.wait().await;
+        handle
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn resume_wakes_paused_waiter() {
+        let control = Arc::new(JobControl::new());
+        control.pause();
+        let waiter = spawn_waiter(control.clone()).await;
+
+        control.resume();
+
+        let cancelled = tokio::time::timeout(WAKE_TIMEOUT, waiter)
+            .await
+            .expect("resume must wake a paused waiter")
+            .expect("waiter task panicked");
+        assert!(!cancelled);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancel_wakes_paused_waiter() {
+        let control = Arc::new(JobControl::new());
+        control.pause();
+        let waiter = spawn_waiter(control.clone()).await;
+
+        control.cancel();
+
+        let cancelled = tokio::time::timeout(WAKE_TIMEOUT, waiter)
+            .await
+            .expect("cancel must wake a paused waiter")
+            .expect("waiter task panicked");
+        assert!(cancelled);
+    }
+
+    #[tokio::test]
+    async fn wait_if_paused_returns_immediately_when_not_paused() {
+        let control = Arc::new(JobControl::new());
+        assert!(!control.wait_if_paused().await);
+    }
+
+    #[tokio::test]
+    async fn cancelled_control_reports_cancelled_even_while_paused() {
+        let control = Arc::new(JobControl::new());
+        control.pause();
+        control.cancel();
+        assert!(control.wait_if_paused().await);
+    }
+}

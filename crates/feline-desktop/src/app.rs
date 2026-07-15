@@ -203,6 +203,7 @@ impl App {
     pub fn boot(
         events_rx: UnboundedReceiver<DownloadEvent>,
         manager: Arc<DownloadManager>,
+        state_store: StateStore,
     ) -> (Self, Task<Message>) {
         let cfg_path = Config::default_path();
         let cfg = Config::load_or_default(&cfg_path);
@@ -213,7 +214,6 @@ impl App {
             Err(e) => (Credentials::default(), false, Some(format!("{e}"))),
         };
 
-        let state_store = StateStore::load(&StateStore::default_path());
         let settings_form = build_settings_form(&cfg, &creds, creds_loaded, creds_err.as_deref());
         let blacklist_content = text_editor::Content::with_text(&cfg.blacklist.join("\n"));
 

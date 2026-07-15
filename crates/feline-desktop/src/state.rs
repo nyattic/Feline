@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use feline_core::util::state_dir;
+use feline_core::util::{state_dir, write_file_synced};
 
 pub const DEFAULT_STATE_FILENAME: &str = "state.json";
 
@@ -27,6 +27,7 @@ pub struct StateFile {
 #[derive(Clone)]
 pub struct StateStore {
     inner: Arc<Mutex<StateFile>>,
+    io: Arc<Mutex<()>>,
     path: PathBuf,
 }
 
@@ -50,6 +51,7 @@ impl StateStore {
         };
         Self {
             inner: Arc::new(Mutex::new(data)),
+            io: Arc::new(Mutex::new(())),
             path: path.to_path_buf(),
         }
     }
@@ -79,6 +81,7 @@ impl StateStore {
     }
 
     pub fn save(&self) -> Result<()> {
+        let _io = self.io.lock();
         let bytes = {
             let guard = self.inner.lock();
             serde_json::to_vec_pretty(&*guard).context("serialize state")?
@@ -87,7 +90,7 @@ impl StateStore {
             std::fs::create_dir_all(parent).ok();
         }
         let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, &bytes).context("write tmp state")?;
+        write_file_synced(&tmp, &bytes).context("write tmp state")?;
         std::fs::rename(&tmp, &self.path).context("rename tmp state")?;
         Ok(())
     }
@@ -111,4 +114,47 @@ fn invalid_backup_path(path: &Path) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("state.json");
     path.with_file_name(format!("{name}.invalid-{stamp}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StateStore;
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("feline-state-test-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn clone_shares_backing_state() {
+        let path = temp_path("clone-shares");
+        let _ = std::fs::remove_file(&path);
+        let a = StateStore::load(&path);
+        let b = a.clone();
+
+        a.update("cat", |s| {
+            s.failed.insert(7);
+        });
+
+        assert!(
+            b.get("cat").failed.contains(&7),
+            "clone must observe writes through the original"
+        );
+    }
+
+    #[test]
+    fn separate_loads_do_not_share_state() {
+        let path = temp_path("separate-loads");
+        let _ = std::fs::remove_file(&path);
+        let a = StateStore::load(&path);
+        let b = StateStore::load(&path);
+
+        a.update("cat", |s| {
+            s.failed.insert(7);
+        });
+
+        assert!(
+            !b.get("cat").failed.contains(&7),
+            "independent loads share no memory; callers must clone one store"
+        );
+    }
 }

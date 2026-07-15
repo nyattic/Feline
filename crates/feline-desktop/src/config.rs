@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use feline_core::{MediaSkip, RatingFilter, Site};
 
-use feline_core::util::{config_dir, default_download_dir};
+use feline_core::util::{config_dir, default_download_dir, write_file_synced};
 
 pub const DEFAULT_CONFIG_FILENAME: &str = "config.json";
 
@@ -76,7 +76,7 @@ impl Config {
         }
         let bytes = serde_json::to_vec_pretty(self).context("serialize config")?;
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, &bytes).context("write tmp config")?;
+        write_file_synced(&tmp, &bytes).context("write tmp config")?;
         std::fs::rename(&tmp, path).context("rename tmp config")?;
         Ok(())
     }
