@@ -1,9 +1,9 @@
 # Feline
 
-![Release](https://img.shields.io/github/v/release/nyattic/Feline?style=flat&color=6366f1)
-![Downloads](https://img.shields.io/github/downloads/nyattic/Feline/total?style=flat&color=10b981)
-![Last Commit](https://img.shields.io/github/last-commit/nyattic/Feline?style=flat&color=f59e0b)
-![License](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat)
+![Release](https://img.shields.io/github/v/release/nyattic/Feline?style=for-the-badge&logo=github&logoColor=white&labelColor=1e1b2e&color=6366f1)
+![Downloads](https://img.shields.io/github/downloads/nyattic/Feline/total?style=for-the-badge&logo=github&logoColor=white&labelColor=1e1b2e&color=6366f1)
+![Last Commit](https://img.shields.io/github/last-commit/nyattic/Feline?style=for-the-badge&logo=git&logoColor=white&labelColor=1e1b2e&color=6366f1)
+![License](https://img.shields.io/badge/license-MIT-6366f1?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=1e1b2e)
 
 A native desktop downloader for e621 and e926 tag searches.
 
