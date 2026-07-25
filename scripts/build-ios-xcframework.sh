@@ -18,12 +18,12 @@ export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-26.2}"
 export CMAKE_OSX_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET"
 
 # 1. Build static libs for each iOS target
-cargo build --release --target aarch64-apple-ios          -p $CRATE
-cargo build --release --target aarch64-apple-ios-sim      -p $CRATE
+cargo build --release --target aarch64-apple-ios          -p $CRATE --features ffi
+cargo build --release --target aarch64-apple-ios-sim      -p $CRATE --features ffi
 
 # 2. Generate Swift bindings + module map
 mkdir -p "$SWIFT_OUT"
-cargo run --release -p $CRATE --bin uniffi-bindgen-feline -- \
+cargo run --release -p $CRATE --features ffi --bin uniffi-bindgen-feline -- \
     generate --library "target/aarch64-apple-ios/release/$LIB_NAME" \
     --language swift --out-dir "$SWIFT_OUT"
 

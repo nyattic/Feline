@@ -13,9 +13,9 @@ pub fn view<'a>(active_tab: Tab, active_jobs: u32) -> Element<'a, Message> {
     });
 
     let nav = column![
-        nav_item("Queue", Tab::Queue, active_tab),
-        nav_item("Settings", Tab::Settings, active_tab),
-        nav_item("Log", Tab::Log, active_tab),
+        nav_item("Queue", shortcut("1"), Tab::Queue, active_tab),
+        nav_item("Settings", shortcut("2"), Tab::Settings, active_tab),
+        nav_item("Log", shortcut("3"), Tab::Log, active_tab),
     ]
     .spacing(4);
 
@@ -60,12 +60,29 @@ pub fn view<'a>(active_tab: Tab, active_jobs: u32) -> Element<'a, Message> {
     .into()
 }
 
-fn nav_item<'a>(label: &str, tab: Tab, active: Tab) -> Element<'a, Message> {
+fn nav_item<'a>(label: &str, shortcut: String, tab: Tab, active: Tab) -> Element<'a, Message> {
     let is_active = tab == active;
-    button(text(label.to_string()).size(14))
-        .padding(Padding::from([10, 16]))
-        .width(Length::Fill)
-        .on_press(Message::TabSelected(tab))
-        .style(theme::nav_button(is_active))
-        .into()
+    button(
+        row![
+            text(label.to_string()).size(14),
+            Space::new().width(Length::Fill),
+            text(shortcut).size(11).style(theme::text_muted),
+        ]
+        .align_y(iced::Alignment::Center),
+    )
+    .padding(Padding::from([10, 16]))
+    .width(Length::Fill)
+    .on_press(Message::TabSelected(tab))
+    .style(theme::nav_button(is_active))
+    .into()
+}
+
+#[cfg(target_os = "macos")]
+fn shortcut(key: &str) -> String {
+    format!("⌘{key}")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn shortcut(key: &str) -> String {
+    format!("Ctrl+{key}")
 }

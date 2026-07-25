@@ -81,6 +81,7 @@ pub fn view<'a>(logs: Vec<LogLine>) -> Element<'a, Message> {
             col = col.push(
                 row![
                     badge(label, color),
+                    text(line.timestamp).size(11).style(theme::text_muted),
                     text(line.text).size(12).style(style).width(Length::Fill),
                 ]
                 .spacing(8)

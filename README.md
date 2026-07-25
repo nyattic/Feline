@@ -10,9 +10,10 @@ A native desktop downloader for e621 and e926 tag searches.
 ## Features
 
 - Save tag searches as bookmarks; re-run them to skip files already present locally
-- Serial job queue with pause, resume, and cancel
+- Serial job queue with pause, resume, cancel, and bounded completion history
 - Filter by rating, blacklist tags, and skip-media-type toggles (videos, flash, animations)
-- MD5-based deduplication and size/checksum verification
+- Streaming discovery with a configurable per-run download limit
+- MD5-based deduplication with size and checksum verification
 - Credentials stored in the OS credential store
 
 ## Usage
@@ -24,6 +25,7 @@ A native desktop downloader for e621 and e926 tag searches.
 5. Re-run a saved query later with its row's Download button. Feline scans the query folder and skips posts whose MD5 is already present.
 
 Files are saved as `{query}/{artist}__{md5}.{ext}` under the chosen folder.
+New installations limit each run to 5,000 new files by default; Settings can change the limit or remove it.
 
 Media cache operations exposed through the FFI layer are limited to cache directories created by Feline, and direct file downloads through that layer must target the configured cache directory. These checks live at the FFI boundary. The underlying `feline-core` functions take arbitrary paths and enforce no scoping of their own, so embedders that call the library directly are responsible for validating the paths they pass.
 
@@ -41,7 +43,13 @@ cargo run --release
 
 The binary is written to `target/release/feline` (or `feline.exe` on Windows).
 
-On macOS, app data is stored under `~/Library/Application Support/Feline` and logs under `~/Library/Logs/Feline`. On other desktop platforms, app data lives next to the executable as `config.json`, `state.json`, `downloads/`, and `log/`. Credentials are stored separately in the OS keychain.
+Desktop data uses each platform's standard user directories:
+
+- macOS: data in `~/Library/Application Support/Feline`, logs in `~/Library/Logs/Feline`
+- Windows: data in `%APPDATA%\Feline`, logs in `%LOCALAPPDATA%\Feline\log`
+- Linux: data in `$XDG_CONFIG_HOME/Feline` and logs in `$XDG_STATE_HOME/Feline/log`, with the usual `~/.config` and `~/.local/state` fallbacks
+
+The default download folder is `~/Downloads/Feline`. Existing Windows and Linux `config.json` and `state.json` files beside the executable are copied to the new data directory on first launch. Credentials remain in the OS credential store.
 
 ## License
 

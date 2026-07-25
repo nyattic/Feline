@@ -5,16 +5,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use feline_core::{MediaSkip, RatingFilter, Site};
 
-use feline_core::util::{config_dir, default_download_dir, write_file_synced};
+use feline_core::util::{config_dir, default_download_dir, migrate_legacy_file, write_file_synced};
 
 pub const DEFAULT_CONFIG_FILENAME: &str = "config.json";
+pub const DEFAULT_MAX_POSTS_PER_RUN: u32 = 5_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagQuery {
     pub id: u64,
     pub tags: String,
-    #[serde(default)]
-    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +24,8 @@ pub struct Config {
     pub rating: RatingFilter,
     #[serde(default)]
     pub media_skip: MediaSkip,
+    #[serde(default)]
+    pub max_posts_per_run: u32,
     pub queries: Vec<TagQuery>,
     #[serde(default)]
     pub next_query_id: u64,
@@ -38,6 +39,7 @@ impl Default for Config {
             blacklist: Vec::new(),
             rating: RatingFilter::all(),
             media_skip: MediaSkip::default(),
+            max_posts_per_run: DEFAULT_MAX_POSTS_PER_RUN,
             queries: Vec::new(),
             next_query_id: 1,
         }
@@ -50,6 +52,7 @@ impl Config {
     }
 
     pub fn load_or_default(path: &Path) -> Self {
+        migrate_legacy_file(path, DEFAULT_CONFIG_FILENAME);
         match std::fs::read(path) {
             Ok(bytes) => match serde_json::from_slice::<Config>(&bytes) {
                 Ok(mut cfg) => {
@@ -84,11 +87,7 @@ impl Config {
     pub fn new_query(&mut self, tags: String) -> u64 {
         let id = self.next_query_id;
         self.next_query_id = self.next_query_id.saturating_add(1);
-        self.queries.push(TagQuery {
-            id,
-            tags,
-            enabled: true,
-        });
+        self.queries.push(TagQuery { id, tags });
         id
     }
 
@@ -97,6 +96,9 @@ impl Config {
     }
 
     fn normalize(&mut self) {
+        if !matches!(self.max_posts_per_run, 0 | 500 | 2_000 | 5_000 | 10_000) {
+            self.max_posts_per_run = DEFAULT_MAX_POSTS_PER_RUN;
+        }
         let next = self
             .queries
             .iter()
@@ -132,7 +134,7 @@ fn invalid_backup_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, TagQuery};
+    use super::{Config, DEFAULT_MAX_POSTS_PER_RUN, TagQuery};
 
     #[test]
     fn load_normalizes_next_query_id_for_legacy_config() {
@@ -160,7 +162,6 @@ mod tests {
             queries: vec![TagQuery {
                 id: 42,
                 tags: "existing".into(),
-                enabled: true,
             }],
             next_query_id: 0,
             ..Config::default()
@@ -168,5 +169,33 @@ mod tests {
 
         cfg.normalize();
         assert_eq!(cfg.new_query("new".into()), 43);
+    }
+
+    #[test]
+    fn legacy_config_keeps_unlimited_download_behavior() {
+        let raw = r#"{
+            "site": "e621",
+            "download_dir": "/tmp/feline",
+            "blacklist": [],
+            "rating": { "safe": true, "questionable": true, "explicit": true },
+            "queries": []
+        }"#;
+
+        let mut cfg: Config = serde_json::from_str(raw).unwrap();
+        cfg.normalize();
+
+        assert_eq!(cfg.max_posts_per_run, 0);
+    }
+
+    #[test]
+    fn unsupported_download_limit_is_normalized() {
+        let mut cfg = Config {
+            max_posts_per_run: 123,
+            ..Config::default()
+        };
+
+        cfg.normalize();
+
+        assert_eq!(cfg.max_posts_per_run, DEFAULT_MAX_POSTS_PER_RUN);
     }
 }

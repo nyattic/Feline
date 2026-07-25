@@ -8,6 +8,33 @@ pub fn write_file_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+pub fn migrate_legacy_file(path: &Path, filename: &str) {
+    if cfg!(target_os = "macos") || path.exists() {
+        return;
+    }
+    let legacy = exe_dir().join(filename);
+    if legacy == path || !legacy.is_file() {
+        return;
+    }
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    match std::fs::copy(&legacy, path) {
+        Ok(_) => tracing::info!(
+            "migrated legacy data file from `{}` to `{}`",
+            legacy.display(),
+            path.display()
+        ),
+        Err(err) => tracing::warn!(
+            "failed to migrate legacy data file from `{}`: {err}",
+            legacy.display()
+        ),
+    }
+}
+
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn exe_dir() -> PathBuf {
     std::env::current_exe()
@@ -16,11 +43,15 @@ pub fn exe_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-#[cfg(target_os = "macos")]
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
+    let key = if cfg!(target_os = "windows") {
+        "USERPROFILE"
+    } else {
+        "HOME"
+    };
+    std::env::var_os(key)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_else(exe_dir)
 }
 
 #[cfg(target_os = "macos")]
@@ -28,9 +59,21 @@ pub fn config_dir() -> PathBuf {
     home_dir().join("Library/Application Support/Feline")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 pub fn config_dir() -> PathBuf {
-    exe_dir()
+    std::env::var_os("APPDATA")
+        .or_else(|| std::env::var_os("LOCALAPPDATA"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join("AppData/Roaming"))
+        .join("Feline")
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+pub fn config_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".config"))
+        .join("Feline")
 }
 
 pub fn state_dir() -> PathBuf {
@@ -42,19 +85,25 @@ pub fn log_dir() -> PathBuf {
     home_dir().join("Library/Logs/Feline")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 pub fn log_dir() -> PathBuf {
-    exe_dir().join("log")
+    std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("APPDATA"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join("AppData/Local"))
+        .join("Feline/log")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+pub fn log_dir() -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".local/state"))
+        .join("Feline/log")
+}
+
 pub fn default_download_dir() -> PathBuf {
     home_dir().join("Downloads/Feline")
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn default_download_dir() -> PathBuf {
-    exe_dir().join("downloads")
 }
 
 pub fn sanitize_path_component(raw: &str) -> String {

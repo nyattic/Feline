@@ -1,6 +1,6 @@
 use parking_lot::RwLock;
-use std::collections::HashSet;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use walkdir::WalkDir;
 
@@ -8,7 +8,7 @@ use feline_core::util::sanitize_path_component;
 
 #[derive(Clone, Default)]
 pub struct Md5Index {
-    inner: Arc<RwLock<HashSet<String>>>,
+    inner: Arc<RwLock<HashMap<String, Vec<PathBuf>>>>,
 }
 
 impl Md5Index {
@@ -17,11 +17,11 @@ impl Md5Index {
     }
 
     pub fn scan(root: &Path, tags: &str) -> Self {
-        let mut set = HashSet::new();
+        let mut paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
         let folder = root.join(sanitize_path_component(tags));
         if !folder.exists() {
             return Self {
-                inner: Arc::new(RwLock::new(set)),
+                inner: Arc::new(RwLock::new(paths)),
             };
         }
         for entry in WalkDir::new(&folder)
@@ -40,25 +40,36 @@ impl Md5Index {
             if let Some(stem) = stem
                 && let Some(md5) = extract_md5(&stem)
             {
-                set.insert(md5.to_string());
+                paths
+                    .entry(md5.to_string())
+                    .or_default()
+                    .push(entry.into_path());
             }
         }
         tracing::info!(
             "md5 index scanned: {} existing files at {}",
-            set.len(),
+            paths.len(),
             folder.display()
         );
         Self {
-            inner: Arc::new(RwLock::new(set)),
+            inner: Arc::new(RwLock::new(paths)),
         }
     }
 
-    pub fn contains(&self, md5: &str) -> bool {
-        self.inner.read().contains(&md5.to_ascii_lowercase())
+    pub fn candidates(&self, md5: &str) -> Vec<PathBuf> {
+        self.inner
+            .read()
+            .get(&md5.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_default()
     }
 
-    pub fn insert(&self, md5: &str) {
-        self.inner.write().insert(md5.to_ascii_lowercase());
+    pub fn insert(&self, md5: &str, path: PathBuf) {
+        self.inner
+            .write()
+            .entry(md5.to_ascii_lowercase())
+            .or_default()
+            .push(path);
     }
 }
 

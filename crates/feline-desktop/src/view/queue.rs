@@ -14,8 +14,10 @@ pub fn view<'a>(
     jobs: Vec<JobView>,
     new_query_buf: &'a str,
     logged_in: bool,
+    removed_query: Option<&'a str>,
 ) -> Element<'a, Message> {
     let active_count = jobs.iter().filter(|j| !j.finished).count();
+    let has_finished = jobs.iter().any(|j| j.finished);
     let queued_count = queries.iter().filter(|q| q.queued).count();
     let header = page_title(
         "Queue",
@@ -43,6 +45,16 @@ pub fn view<'a>(
                 theme::palette::TEXT_MUTED
             }
         ),
+        Space::new().width(Length::Fill),
+        link_button("Open folder").on_press(Message::OpenDownloadFolder),
+        {
+            let button = link_button("Clear completed");
+            if has_finished {
+                button.on_press(Message::ClearFinishedJobs)
+            } else {
+                button
+            }
+        },
     ]
     .spacing(8);
 
@@ -119,15 +131,30 @@ pub fn view<'a>(
         .into()
     };
 
-    container(
-        column![header, summary, input, body]
-            .spacing(16)
-            .padding(Padding::new(32.0)),
-    )
-    .style(theme::page_bg)
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+    let mut content = column![header, summary, input].spacing(16);
+    if let Some(tags) = removed_query {
+        content = content.push(
+            container(
+                row![
+                    text(format!("Removed “{}”.", compact_middle(tags, 72)))
+                        .size(12)
+                        .style(theme::text_muted),
+                    Space::new().width(Length::Fill),
+                    link_button("Undo").on_press(Message::UndoRemoveQuery),
+                ]
+                .align_y(iced::Alignment::Center),
+            )
+            .style(theme::subtle_panel)
+            .padding(Padding::from([8u16, 12u16])),
+        );
+    }
+    content = content.push(body);
+
+    container(content.padding(Padding::new(32.0)))
+        .style(theme::page_bg)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 fn empty_state<'a>(logged_in: bool) -> Element<'a, Message> {
@@ -190,6 +217,14 @@ fn query_card<'a>(
     };
 
     let display_tags = compact_middle(&q.tags, TAG_DISPLAY_CHARS);
+    let detail = if q.last_run.is_empty() {
+        "Local matches are skipped after size and MD5 verification.".to_string()
+    } else {
+        format!(
+            "Last run {} · Local matches are verified before being skipped.",
+            q.last_run
+        )
+    };
     let title = column![
         row![
             text(display_tags).size(16),
@@ -198,9 +233,7 @@ fn query_card<'a>(
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center),
-        text("Local matches are skipped by MD5 when this query runs.")
-            .size(12)
-            .style(theme::text_muted),
+        text(detail).size(12).style(theme::text_muted),
     ]
     .spacing(4)
     .width(Length::Fill);

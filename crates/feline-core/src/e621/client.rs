@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use wreq::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, USER_AGENT};
 use wreq_util::Profile;
@@ -23,9 +24,34 @@ pub const MAX_MEDIA_RESPONSE_BYTES: u64 = 256 * 1024 * 1024;
 
 pub const SESSION_EXPIRED: &str = "Your session expired. Sign in again.";
 
+static DOWNLOAD_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
 pub struct RawResponse {
     pub status: u16,
     pub body: Vec<u8>,
+}
+
+struct DownloadTempFile {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl DownloadTempFile {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for DownloadTempFile {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -244,7 +270,7 @@ impl Client {
             });
         }
 
-        let mut req = self.api_http.get(parsed.as_str());
+        let mut req = self.download_http.get(parsed.as_str());
         if host_accepts_credentials(&host, self.site.credential_domains()) {
             self.limiter.until_ready().await;
             req = self.apply_auth(req);
@@ -294,7 +320,7 @@ impl Client {
             anyhow::bail!("media host not allowed: {host}");
         }
 
-        let mut req = self.api_http.get(parsed.as_str());
+        let mut req = self.download_http.get(parsed.as_str());
         if host_accepts_credentials(&host, self.site.credential_domains()) {
             self.limiter.until_ready().await;
             req = self.apply_auth(req);
@@ -314,9 +340,19 @@ impl Client {
 
         let expected_md5 = expected_md5_from_url(&parsed);
 
-        let mut file = tokio::fs::File::create(dest_path)
+        let dest_path = Path::new(dest_path);
+        let seq = DOWNLOAD_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let name = dest_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("download");
+        let tmp_path =
+            dest_path.with_file_name(format!(".{name}.{}.{seq}.part", std::process::id()));
+        let mut tmp_file = DownloadTempFile::new(tmp_path.clone());
+
+        let mut file = tokio::fs::File::create(&tmp_path)
             .await
-            .context("create destination file")?;
+            .context("create temporary destination file")?;
         let mut hasher = expected_md5.as_ref().map(|_| Md5::new());
         let mut total: u64 = 0;
         let mut stream = resp.bytes_stream();
@@ -325,7 +361,6 @@ impl Client {
             total = total.saturating_add(chunk.len() as u64);
             if total > MAX_DOWNLOAD_BYTES {
                 drop(file);
-                let _ = tokio::fs::remove_file(dest_path).await;
                 anyhow::bail!("file exceeds download cap of {MAX_DOWNLOAD_BYTES} bytes; aborted");
             }
             if let Some(h) = hasher.as_mut() {
@@ -334,15 +369,19 @@ impl Client {
             file.write_all(&chunk).await.context("write media chunk")?;
         }
         file.flush().await.context("flush media file")?;
+        file.sync_all().await.context("sync media file")?;
         drop(file);
 
         if let (Some(expected), Some(h)) = (expected_md5, hasher) {
             let actual = hex::encode(h.finalize());
             if actual != expected {
-                let _ = tokio::fs::remove_file(dest_path).await;
                 anyhow::bail!("md5 mismatch: expected {expected}, got {actual}");
             }
         }
+        tokio::fs::rename(&tmp_path, dest_path)
+            .await
+            .context("commit destination file")?;
+        tmp_file.disarm();
         Ok(status)
     }
 }
@@ -553,5 +592,14 @@ mod tests {
         let params = search_params("dog".to_string(), None);
         assert_eq!(params.len(), 2);
         assert!(params.iter().all(|(k, _)| *k != "page"));
+    }
+
+    #[test]
+    fn download_temp_file_removes_armed_path() {
+        let path =
+            std::env::temp_dir().join(format!("feline-core-download-guard-{}", std::process::id()));
+        std::fs::write(&path, b"partial").unwrap();
+        drop(DownloadTempFile::new(path.clone()));
+        assert!(!path.exists());
     }
 }

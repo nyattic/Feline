@@ -10,7 +10,7 @@ use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 
 use super::dedup::Md5Index;
-use super::worker::{DownloadError, download_post};
+use super::worker::{DownloadError, download_post, existing_file_is_valid};
 use crate::config::Config;
 use crate::credentials::Credentials;
 use crate::state::StateStore;
@@ -38,6 +38,7 @@ pub enum DownloadEvent {
         total_posts: usize,
         skipped_existing: usize,
         skipped_failed: usize,
+        limit_reached: bool,
     },
     Progress {
         job_id: u64,
@@ -279,7 +280,7 @@ fn handle_download_outcome(
         Ok(path) => {
             progress.done += 1;
             progress.bytes_in_window = progress.bytes_in_window.saturating_add(size);
-            md5_index.insert(&md5);
+            md5_index.insert(&md5, path.clone());
             let fname = path
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -376,9 +377,18 @@ async fn run_job(
         post_tx,
     )));
 
-    let mut posts = Vec::new();
+    let mut progress = ProgressState {
+        done: 0,
+        failed: 0,
+        bytes_in_window: 0,
+        window_start: Instant::now(),
+    };
+    let mut futs: FuturesUnordered<BoxFuture<'static, DownloadOutcome>> = FuturesUnordered::new();
+    let mut dispatched: usize = 0;
     let mut channel_open = true;
-    while channel_open {
+    let mut discovery_done = false;
+
+    loop {
         if wait_while_paused(job_id, &control, &events).await {
             if let Some(handle) = discovery.take() {
                 handle.abort();
@@ -388,98 +398,80 @@ async fn run_job(
             return Ok(());
         }
 
-        loop {
+        while channel_open && futs.len() < CONCURRENT_DOWNLOADS {
             match post_rx.try_recv() {
-                Ok(post) => posts.push(post),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    channel_open = false;
-                    break;
+                Ok(post) => {
+                    dispatched += 1;
+                    futs.push(spawn_download(post, &http, &download_root, &tags, &control));
                 }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => channel_open = false,
             }
         }
 
-        if !channel_open {
-            break;
-        }
-
-        tokio::select! {
-            biased;
-            _ = control.wake.notified() => {}
-            maybe = post_rx.recv() => match maybe {
-                Some(post) => posts.push(post),
-                None => channel_open = false,
-            },
-        }
-    }
-
-    if let Some(handle) = discovery.take() {
-        let summary = match handle.await {
-            Ok(summary) => summary,
-            Err(join_err) => {
+        if !channel_open && !discovery_done {
+            let Some(handle) = discovery.take() else {
                 let _ = state.save();
                 let _ = events.send(DownloadEvent::JobError {
                     job_id,
-                    error: format!("discovery task failed: {join_err}"),
+                    error: "discovery task ended without a result".into(),
                 });
                 return Ok(());
-            }
-        };
-        if let Some(err) = summary.error {
-            let _ = state.save();
-            let _ = events.send(DownloadEvent::JobError { job_id, error: err });
-            return Ok(());
-        }
-        if summary.cancelled {
-            let _ = state.save();
-            let _ = events.send(DownloadEvent::JobCancelled { job_id });
-            return Ok(());
-        }
-        let _ = events.send(DownloadEvent::DiscoveryDone {
-            job_id,
-            total_posts: summary.total,
-            skipped_existing: summary.skipped_existing,
-            skipped_failed: summary.skipped_failed,
-        });
-    }
-
-    let mut progress = ProgressState {
-        done: 0,
-        failed: 0,
-        bytes_in_window: 0,
-        window_start: Instant::now(),
-    };
-    let mut futs: FuturesUnordered<BoxFuture<'static, DownloadOutcome>> = FuturesUnordered::new();
-    let mut dispatched: usize = 0;
-    let mut pending_posts = posts.into_iter();
-
-    loop {
-        if wait_while_paused(job_id, &control, &events).await {
-            let _ = state.save();
-            let _ = events.send(DownloadEvent::JobCancelled { job_id });
-            return Ok(());
-        }
-
-        while futs.len() < CONCURRENT_DOWNLOADS {
-            let Some(post) = pending_posts.next() else {
-                break;
             };
-            dispatched += 1;
-            futs.push(spawn_download(post, &http, &download_root, &tags, &control));
+            let summary = match handle.await {
+                Ok(summary) => summary,
+                Err(join_err) => {
+                    let _ = state.save();
+                    let _ = events.send(DownloadEvent::JobError {
+                        job_id,
+                        error: format!("discovery task failed: {join_err}"),
+                    });
+                    return Ok(());
+                }
+            };
+            if let Some(err) = summary.error {
+                let _ = state.save();
+                let _ = events.send(DownloadEvent::JobError { job_id, error: err });
+                return Ok(());
+            }
+            if summary.cancelled {
+                let _ = state.save();
+                let _ = events.send(DownloadEvent::JobCancelled { job_id });
+                return Ok(());
+            }
+            let _ = events.send(DownloadEvent::DiscoveryDone {
+                job_id,
+                total_posts: summary.total,
+                skipped_existing: summary.skipped_existing,
+                skipped_failed: summary.skipped_failed,
+                limit_reached: summary.limit_reached,
+            });
+            discovery_done = true;
         }
 
-        if futs.is_empty() {
+        if discovery_done && futs.is_empty() {
             break;
         }
 
         tokio::select! {
             biased;
             _ = control.wake.notified() => {}
-            outcome = futs.next() => {
+            outcome = futs.next(), if !futs.is_empty() => {
                 if let Some(outcome) = outcome {
                     handle_download_outcome(
                         outcome, job_id, &tags, &state, &md5_index, &events, &mut progress,
                     );
+                }
+            }
+            maybe = post_rx.recv(), if channel_open && futs.len() < CONCURRENT_DOWNLOADS => {
+                match maybe {
+                    Some(post) => {
+                        dispatched += 1;
+                        futs.push(spawn_download(
+                            post, &http, &download_root, &tags, &control,
+                        ));
+                    }
+                    None => channel_open = false,
                 }
             }
         }
@@ -508,6 +500,7 @@ struct DiscoverySummary {
     total: usize,
     skipped_existing: usize,
     skipped_failed: usize,
+    limit_reached: bool,
     cancelled: bool,
     error: Option<String>,
 }
@@ -535,7 +528,7 @@ async fn discover_stream(
         .with_max_times(4)
         .with_jitter();
 
-    loop {
+    'pages: loop {
         if control.wait_if_paused().await {
             summary.cancelled = true;
             return summary;
@@ -574,7 +567,7 @@ async fn discover_stream(
                 summary.skipped_failed += 1;
                 continue;
             }
-            if md5_index.contains(&post.file.md5) {
+            if has_valid_existing_file(&md5_index, &post.file.md5, post.file.size).await {
                 summary.skipped_existing += 1;
                 continue;
             }
@@ -586,6 +579,10 @@ async fn discover_stream(
                     error: "post has no file url (deleted or restricted)".into(),
                 });
                 continue;
+            }
+            if cfg.max_posts_per_run > 0 && summary.total >= cfg.max_posts_per_run as usize {
+                summary.limit_reached = true;
+                break 'pages;
             }
             if post_tx.send(post).await.is_err() {
                 summary.cancelled = true;
@@ -607,6 +604,21 @@ async fn discover_stream(
     }
 
     summary
+}
+
+async fn has_valid_existing_file(index: &Md5Index, md5: &str, size: u64) -> bool {
+    for path in index.candidates(md5) {
+        match existing_file_is_valid(&path, md5, size).await {
+            Ok(true) => return true,
+            Ok(false) => {
+                tracing::warn!(path = %path.display(), "existing file failed verification");
+            }
+            Err(err) => {
+                tracing::warn!(path = %path.display(), %err, "existing file could not be verified");
+            }
+        }
+    }
+    false
 }
 
 fn spawn_download(
@@ -642,7 +654,9 @@ fn compute_bps(window_start: &mut Instant, bytes_in_window: &mut u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::JobControl;
+    use super::{JobControl, has_valid_existing_file};
+    use crate::download::dedup::Md5Index;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -703,5 +717,43 @@ mod tests {
         control.pause();
         control.cancel();
         assert!(control.wait_if_paused().await);
+    }
+
+    fn dedup_root(name: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("feline-dedup-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("cat")).unwrap();
+        root
+    }
+
+    #[tokio::test]
+    async fn dedup_accepts_file_only_after_content_verification() {
+        let root = dedup_root("valid");
+        let md5 = "5d41402abc4b2a76b9719d911017c592";
+        std::fs::write(
+            root.join("cat").join(format!("artist__{md5}.jpg")),
+            b"hello",
+        )
+        .unwrap();
+        let index = Md5Index::scan(&root, "cat");
+
+        assert!(has_valid_existing_file(&index, md5, 5).await);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn dedup_rejects_filename_with_wrong_content() {
+        let root = dedup_root("invalid");
+        let md5 = "5d41402abc4b2a76b9719d911017c592";
+        std::fs::write(
+            root.join("cat").join(format!("artist__{md5}.jpg")),
+            b"wrong",
+        )
+        .unwrap();
+        let index = Md5Index::scan(&root, "cat");
+
+        assert!(!has_valid_existing_file(&index, md5, 5).await);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use feline_core::util::{state_dir, write_file_synced};
+use feline_core::util::{migrate_legacy_file, state_dir, write_file_synced};
 
 pub const DEFAULT_STATE_FILENAME: &str = "state.json";
 
@@ -37,6 +37,7 @@ impl StateStore {
     }
 
     pub fn load(path: &Path) -> Self {
+        migrate_legacy_file(path, DEFAULT_STATE_FILENAME);
         let data = match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice::<StateFile>(&bytes).unwrap_or_else(|e| {
                 preserve_invalid_file(path, "state");

@@ -13,8 +13,39 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  verify:
+    name: Verify source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev \
+            libfontconfig1-dev libssl-dev libdbus-1-dev \
+            pkg-config
+
+      - name: Check
+        run: |
+          cargo fmt --all -- --check
+          cargo check --locked --workspace --all-targets
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-features
+
   windows:
     name: Build Windows EXE
+    needs: verify
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +71,7 @@ jobs:
 
   macos:
     name: Build macOS DMG (Apple Silicon)
+    needs: verify
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,6 +117,7 @@ jobs:
 
   linux:
     name: Build Linux AppImage
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

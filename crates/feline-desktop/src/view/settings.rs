@@ -3,13 +3,20 @@ use iced::widget::{
 };
 use iced::{Color, Element, Length, Padding};
 
-use crate::app::{Message, SettingsForm, SiteOption};
+use crate::app::{DownloadLimitOption, Message, SettingsForm, SiteOption};
 use crate::theme;
 use crate::view::widgets::{
     caption, card, field_label, link_button, page_title, primary_button, section_title, switch,
 };
 
 const SITE_OPTIONS: [SiteOption; 2] = [SiteOption::E621, SiteOption::E926];
+const DOWNLOAD_LIMIT_OPTIONS: [DownloadLimitOption; 5] = [
+    DownloadLimitOption::Posts500,
+    DownloadLimitOption::Posts2000,
+    DownloadLimitOption::Posts5000,
+    DownloadLimitOption::Posts10000,
+    DownloadLimitOption::Unlimited,
+];
 
 pub fn view<'a>(
     form: &'a SettingsForm,
@@ -20,12 +27,16 @@ pub fn view<'a>(
         "Credentials, destination, and filters apply to every queued download.",
     );
 
-    let status_color = if form.creds_loaded {
+    let status_color = if form.creds_dirty {
+        theme::palette::WARN
+    } else if form.creds_loaded {
         theme::palette::SUCCESS
     } else {
         theme::palette::WARN
     };
-    let status_label = if form.creds_loaded {
+    let status_label = if form.creds_dirty {
+        "changes pending"
+    } else if form.creds_loaded {
         "credentials saved"
     } else {
         "login required"
@@ -33,7 +44,11 @@ pub fn view<'a>(
     let status_panel = container(
         row![
             badge(status_label, status_color),
-            text(if form.creds_loaded {
+            text(if form.creds_dirty && form.creds_loaded {
+                "Log in to apply changes. Saved credentials remain active until then."
+            } else if form.creds_dirty {
+                "Log in to verify and save these credentials."
+            } else if form.creds_loaded {
                 "Downloads can start from the Queue page."
             } else {
                 "Enter your username and API key, then log in once."
@@ -48,23 +63,31 @@ pub fn view<'a>(
     .padding(Padding::from([10u16, 14u16]))
     .width(Length::Fill);
 
+    let mut username_input = text_input("", &form.username)
+        .style(theme::text_input_style)
+        .padding(Padding::from([8u16, 12u16]))
+        .size(14);
+    if !form.creds_checking {
+        username_input = username_input.on_input(Message::UsernameChanged);
+    }
+
+    let mut api_key_input = text_input(api_key_placeholder(form), &form.api_key)
+        .secure(true)
+        .style(theme::text_input_style)
+        .padding(Padding::from([8u16, 12u16]))
+        .size(14);
+    if !form.creds_checking {
+        api_key_input = api_key_input.on_input(Message::ApiKeyChanged);
+    }
+
     let credentials_card = card(
         column![
             section_title("Credentials"),
             caption("Saved to the OS credential store after login."),
             field_label("Username"),
-            text_input("", &form.username)
-                .on_input(Message::UsernameChanged)
-                .style(theme::text_input_style)
-                .padding(Padding::from([8u16, 12u16]))
-                .size(14),
+            username_input,
             field_label("API key"),
-            text_input(api_key_placeholder(form), &form.api_key)
-                .on_input(Message::ApiKeyChanged)
-                .secure(true)
-                .style(theme::text_input_style)
-                .padding(Padding::from([8u16, 12u16]))
-                .size(14),
+            api_key_input,
             credentials_status(form),
             credentials_actions(form),
         ]
@@ -140,6 +163,22 @@ pub fn view<'a>(
     )
     .width(Length::Fill);
 
+    let limit_card = card(
+        column![
+            section_title("Per-run download limit"),
+            caption("Stops discovery after this many new files have been queued."),
+            pick_list(
+                &DOWNLOAD_LIMIT_OPTIONS[..],
+                Some(form.download_limit),
+                Message::DownloadLimitChanged,
+            )
+            .padding(Padding::from([8u16, 12u16])),
+        ]
+        .spacing(10)
+        .padding(Padding::from([18u16, 20u16])),
+    )
+    .width(Length::Fill);
+
     let blacklist_card = card(
         column![
             section_title("Blacklist tags"),
@@ -159,18 +198,31 @@ pub fn view<'a>(
     )
     .width(Length::Fill);
 
-    let body = column![
-        header,
-        status_panel,
-        credentials_card,
-        site_card,
-        folder_card,
-        rating_card,
-        skip_card,
-        blacklist_card,
-        Space::new().height(Length::Fixed(20.0)),
-    ]
-    .spacing(16);
+    let mut body = column![header, status_panel].spacing(16);
+    if !form.config_save_error.is_empty() {
+        body = body.push(
+            container(
+                text(format!(
+                    "Settings could not be saved: {}",
+                    form.config_save_error
+                ))
+                .size(12)
+                .style(theme::text_danger),
+            )
+            .style(theme::subtle_panel)
+            .padding(Padding::from([10u16, 14u16]))
+            .width(Length::Fill),
+        );
+    }
+    body = body
+        .push(credentials_card)
+        .push(site_card)
+        .push(folder_card)
+        .push(rating_card)
+        .push(skip_card)
+        .push(limit_card)
+        .push(blacklist_card)
+        .push(Space::new().height(Length::Fixed(20.0)));
 
     container(
         scrollable(body.width(Length::Fill).padding(Padding::new(32.0)))
@@ -186,9 +238,20 @@ pub fn view<'a>(
 
 fn credentials_status<'a>(form: &SettingsForm) -> Element<'a, Message> {
     if !form.creds_error.is_empty() {
-        return text(format!("Login failed: {}", form.creds_error))
+        let suffix = if form.creds_loaded {
+            " Saved credentials remain active."
+        } else {
+            ""
+        };
+        return text(format!("Login failed: {}{suffix}", form.creds_error))
             .size(12)
             .style(theme::text_danger)
+            .into();
+    }
+    if form.creds_dirty {
+        return text("Enter the API key and log in to apply these changes.")
+            .size(12)
+            .style(theme::text_warn)
             .into();
     }
     if form.creds_loaded {

@@ -18,6 +18,7 @@ use crate::view;
 use feline_core::e621::Client;
 
 const LOG_LINE_CAP: usize = 2000;
+const FINISHED_JOB_CAP: usize = 50;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 const PHASE_TICK: Duration = Duration::from_millis(400);
 
@@ -32,6 +33,49 @@ pub enum Tab {
 pub enum SiteOption {
     E621,
     E926,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadLimitOption {
+    Posts500,
+    Posts2000,
+    Posts5000,
+    Posts10000,
+    Unlimited,
+}
+
+impl DownloadLimitOption {
+    fn from_limit(limit: u32) -> Self {
+        match limit {
+            500 => Self::Posts500,
+            2_000 => Self::Posts2000,
+            5_000 => Self::Posts5000,
+            10_000 => Self::Posts10000,
+            _ => Self::Unlimited,
+        }
+    }
+
+    fn into_limit(self) -> u32 {
+        match self {
+            Self::Posts500 => 500,
+            Self::Posts2000 => 2_000,
+            Self::Posts5000 => 5_000,
+            Self::Posts10000 => 10_000,
+            Self::Unlimited => 0,
+        }
+    }
+}
+
+impl std::fmt::Display for DownloadLimitOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Posts500 => f.write_str("500 posts"),
+            Self::Posts2000 => f.write_str("2,000 posts"),
+            Self::Posts5000 => f.write_str("5,000 posts"),
+            Self::Posts10000 => f.write_str("10,000 posts"),
+            Self::Unlimited => f.write_str("Unlimited"),
+        }
+    }
 }
 
 impl SiteOption {
@@ -69,6 +113,7 @@ pub enum LogLevel {
 #[derive(Debug, Clone)]
 pub struct LogLine {
     pub level: LogLevel,
+    pub timestamp: String,
     pub text: String,
 }
 
@@ -105,6 +150,7 @@ pub struct QueryView {
     pub failed_count: usize,
     pub running: bool,
     pub queued: bool,
+    pub last_run: String,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +175,8 @@ pub struct SettingsForm {
     pub creds_loaded: bool,
     pub creds_checking: bool,
     pub creds_error: String,
+    pub creds_dirty: bool,
+    pub config_save_error: String,
     pub site: SiteOption,
     pub download_dir: String,
     pub rating_safe: bool,
@@ -137,6 +185,7 @@ pub struct SettingsForm {
     pub skip_video: bool,
     pub skip_flash: bool,
     pub skip_animation: bool,
+    pub download_limit: DownloadLimitOption,
     pub blacklist: String,
 }
 
@@ -146,9 +195,13 @@ pub enum Message {
     NewQueryChanged(String),
     StartJob(String),
     RemoveQuery(u64),
+    UndoRemoveQuery,
     CancelQuery(u64),
     ClearQueryFailures(u64),
     TogglePauseJob(u64),
+    ClearFinishedJobs,
+    OpenDownloadFolder,
+    DownloadFolderOpened(Result<(), String>),
 
     UsernameChanged(String),
     ApiKeyChanged(String),
@@ -162,11 +215,16 @@ pub enum Message {
     SkipVideo(bool),
     SkipFlash(bool),
     SkipAnimation(bool),
+    DownloadLimitChanged(DownloadLimitOption),
     BlacklistEdited(text_editor::Action),
     ConfigSaveTick(u64),
 
     Login,
-    LoginCompleted(Result<(), String>),
+    LoginCompleted {
+        token: u64,
+        creds: Credentials,
+        result: Result<(), String>,
+    },
     Logout,
 
     ClearLogs,
@@ -181,9 +239,9 @@ pub struct App {
     save_token: u64,
 
     creds: Credentials,
-    creds_loaded_from_store: bool,
-    creds_store_error: Option<String>,
+    active_creds: Option<Credentials>,
     creds_checking: bool,
+    login_token: u64,
 
     state_store: StateStore,
     manager: Arc<DownloadManager>,
@@ -191,6 +249,7 @@ pub struct App {
     jobs: HashMap<u64, JobState>,
     pending_tags: VecDeque<String>,
     log_lines: VecDeque<LogLine>,
+    removed_query: Option<(usize, TagQuery)>,
 
     active_tab: Tab,
     new_query_buf: String,
@@ -216,20 +275,22 @@ impl App {
 
         let settings_form = build_settings_form(&cfg, &creds, creds_loaded, creds_err.as_deref());
         let blacklist_content = text_editor::Content::with_text(&cfg.blacklist.join("\n"));
+        let active_creds = creds_loaded.then(|| creds.clone());
 
         let app = Self {
             cfg,
             cfg_path,
             save_token: 0,
             creds,
-            creds_loaded_from_store: creds_loaded,
-            creds_store_error: creds_err,
+            active_creds,
             creds_checking: false,
+            login_token: 0,
             state_store,
             manager,
             jobs: HashMap::new(),
             pending_tags: VecDeque::new(),
             log_lines: VecDeque::with_capacity(LOG_LINE_CAP),
+            removed_query: None,
             active_tab: Tab::Queue,
             new_query_buf: String::new(),
             settings_form,
@@ -258,11 +319,12 @@ impl App {
                     JobPhase::Starting | JobPhase::Discovering | JobPhase::Downloading
                 )
         });
-        if any_active_phase {
+        let phase = if any_active_phase {
             iced::time::every(PHASE_TICK).map(|_| Message::PhaseTick)
         } else {
             Subscription::none()
-        }
+        };
+        Subscription::batch([phase, iced::event::listen_with(keyboard_shortcut)])
     }
 
     pub fn update(&mut self, msg: Message) -> Task<Message> {
@@ -281,17 +343,29 @@ impl App {
                 Task::none()
             }
             Message::RemoveQuery(id) => {
-                let removed_tags = self
+                let removed = self
                     .cfg
                     .queries
                     .iter()
-                    .find(|q| q.id == id)
-                    .map(|q| q.tags.clone());
+                    .position(|q| q.id == id)
+                    .map(|index| (index, self.cfg.queries[index].clone()));
                 self.cfg.remove_query(id);
-                if let Some(tags) = removed_tags {
-                    self.pending_tags.retain(|t| t != &tags);
+                if let Some((index, query)) = removed {
+                    self.pending_tags.retain(|tags| tags != &query.tags);
+                    self.removed_query = Some((index, query));
                 }
                 self.persist_config_now();
+                Task::none()
+            }
+            Message::UndoRemoveQuery => {
+                let Some((index, query)) = self.removed_query.take() else {
+                    return Task::none();
+                };
+                if !self.cfg.queries.iter().any(|item| item.tags == query.tags) {
+                    let index = index.min(self.cfg.queries.len());
+                    self.cfg.queries.insert(index, query);
+                    self.persist_config_now();
+                }
                 Task::none()
             }
             Message::CancelQuery(id) => {
@@ -358,17 +432,45 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ClearFinishedJobs => {
+                self.jobs.retain(|_, job| !job.finished);
+                Task::none()
+            }
+            Message::OpenDownloadFolder => {
+                let path = self.cfg.download_dir.clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || open_download_folder(&path))
+                            .await
+                            .map_err(|err| format!("folder opener failed: {err}"))?
+                    },
+                    Message::DownloadFolderOpened,
+                )
+            }
+            Message::DownloadFolderOpened(result) => {
+                match result {
+                    Ok(()) => self.push_log(LogLevel::Info, "opened download folder"),
+                    Err(err) => {
+                        self.push_log(LogLevel::Error, format!("open download folder: {err}"))
+                    }
+                }
+                Task::none()
+            }
 
             Message::UsernameChanged(v) => {
                 self.settings_form.username = v.clone();
                 self.settings_form.api_key_saved = false;
                 self.creds.username = v;
+                self.invalidate_login_attempt();
+                self.sync_credentials_dirty();
                 Task::none()
             }
             Message::ApiKeyChanged(v) => {
                 self.settings_form.api_key = v.clone();
                 self.settings_form.api_key_saved = false;
                 self.creds.api_key = v;
+                self.invalidate_login_attempt();
+                self.sync_credentials_dirty();
                 Task::none()
             }
             Message::SiteChanged(site) => {
@@ -432,6 +534,11 @@ impl App {
                 self.cfg.media_skip.animation = v;
                 self.schedule_save()
             }
+            Message::DownloadLimitChanged(limit) => {
+                self.settings_form.download_limit = limit;
+                self.cfg.max_posts_per_run = limit.into_limit();
+                self.schedule_save()
+            }
             Message::BlacklistEdited(action) => {
                 self.blacklist_content.perform(action);
                 self.update_blacklist(self.blacklist_content.text())
@@ -447,10 +554,13 @@ impl App {
                 if self.creds.is_empty() || self.creds_checking {
                     return Task::none();
                 }
+                self.login_token = self.login_token.wrapping_add(1);
+                let token = self.login_token;
                 self.creds_checking = true;
                 self.settings_form.creds_checking = true;
                 self.settings_form.creds_error.clear();
                 let creds = self.creds.clone();
+                let checked_creds = creds.clone();
                 let site = self.cfg.site;
                 Task::perform(
                     async move {
@@ -459,20 +569,33 @@ impl App {
                             .map_err(|e| format!("{e}"))?;
                         client.verify_login().await.map_err(|e| format!("{e:#}"))
                     },
-                    Message::LoginCompleted,
+                    move |result| Message::LoginCompleted {
+                        token,
+                        creds: checked_creds,
+                        result,
+                    },
                 )
             }
-            Message::LoginCompleted(result) => {
+            Message::LoginCompleted {
+                token,
+                creds,
+                result,
+            } => {
+                if token != self.login_token {
+                    return Task::none();
+                }
                 self.creds_checking = false;
                 self.settings_form.creds_checking = false;
                 match result {
-                    Ok(()) => match crate::credentials::save(&self.creds) {
+                    Ok(()) => match crate::credentials::save(&creds) {
                         Ok(()) => {
-                            self.creds_loaded_from_store = true;
-                            self.creds_store_error = None;
+                            self.creds = creds.clone();
+                            self.active_creds = Some(creds.clone());
                             self.settings_form.creds_loaded = true;
+                            self.settings_form.username = creds.username;
                             self.settings_form.api_key.clear();
                             self.settings_form.api_key_saved = true;
+                            self.settings_form.creds_dirty = false;
                             self.settings_form.creds_error.clear();
                             self.push_log(
                                 LogLevel::Info,
@@ -480,15 +603,12 @@ impl App {
                             );
                         }
                         Err(e) => {
-                            self.creds_store_error = Some(format!("{e}"));
                             self.settings_form.creds_error = format!("{e}");
                             self.push_log(LogLevel::Error, format!("credentials save failed: {e}"));
                         }
                     },
                     Err(err) => {
-                        self.creds_loaded_from_store = false;
-                        self.creds_store_error = Some(err.clone());
-                        self.settings_form.creds_loaded = false;
+                        self.settings_form.creds_loaded = self.active_creds.is_some();
                         self.settings_form.creds_error = err.clone();
                         self.push_log(LogLevel::Error, format!("login failed: {err}"));
                     }
@@ -496,13 +616,14 @@ impl App {
                 Task::none()
             }
             Message::Logout => {
+                self.invalidate_login_attempt();
                 self.creds = Credentials::default();
-                self.creds_loaded_from_store = false;
-                self.creds_store_error = None;
+                self.active_creds = None;
                 self.settings_form.username.clear();
                 self.settings_form.api_key.clear();
                 self.settings_form.api_key_saved = false;
                 self.settings_form.creds_loaded = false;
+                self.settings_form.creds_dirty = false;
                 self.settings_form.creds_error.clear();
                 if let Err(e) = crate::credentials::clear() {
                     self.push_log(LogLevel::Warn, format!("logout: {e}"));
@@ -537,7 +658,7 @@ impl App {
             .map(|q| self.to_query_view(q))
             .collect();
         let mut sorted_jobs: Vec<(&u64, &JobState)> = self.jobs.iter().collect();
-        sorted_jobs.sort_by_key(|(id, _)| **id);
+        sorted_jobs.sort_by_key(|(id, _)| std::cmp::Reverse(**id));
         let jobs: Vec<JobView> = sorted_jobs
             .iter()
             .map(|(id, j)| self.to_job_view(**id, j))
@@ -549,7 +670,10 @@ impl App {
                 queries,
                 jobs,
                 &self.new_query_buf,
-                self.creds_loaded_from_store,
+                self.active_creds.is_some(),
+                self.removed_query
+                    .as_ref()
+                    .map(|(_, query)| query.tags.as_str()),
             ),
             Tab::Settings => view::settings::view(&self.settings_form, &self.blacklist_content),
             Tab::Log => view::log::view(logs),
@@ -577,8 +701,12 @@ impl App {
     }
 
     fn persist_config_now(&mut self) {
-        if let Err(e) = self.cfg.save(&self.cfg_path) {
-            self.push_log(LogLevel::Error, format!("config save failed: {e}"));
+        match self.cfg.save(&self.cfg_path) {
+            Ok(()) => self.settings_form.config_save_error.clear(),
+            Err(e) => {
+                self.settings_form.config_save_error = format!("{e}");
+                self.push_log(LogLevel::Error, format!("config save failed: {e}"));
+            }
         }
     }
 
@@ -594,12 +722,29 @@ impl App {
         }
         self.log_lines.push_back(LogLine {
             level,
+            timestamp: time::OffsetDateTime::now_utc()
+                .format(time::macros::format_description!(
+                    "[hour]:[minute]:[second]"
+                ))
+                .unwrap_or_default(),
             text: text.into(),
         });
     }
 
+    fn invalidate_login_attempt(&mut self) {
+        if self.creds_checking {
+            self.login_token = self.login_token.wrapping_add(1);
+            self.creds_checking = false;
+            self.settings_form.creds_checking = false;
+        }
+    }
+
+    fn sync_credentials_dirty(&mut self) {
+        self.settings_form.creds_dirty = self.active_creds.as_ref() != Some(&self.creds);
+    }
+
     fn start_job(&mut self, tags: String) {
-        if !self.creds_loaded_from_store || self.creds.is_empty() {
+        if self.active_creds.is_none() {
             self.push_log(LogLevel::Warn, "login required before downloading");
             return;
         }
@@ -632,7 +777,11 @@ impl App {
 
     fn spawn_now(&mut self, tags: String) {
         let cfg = self.cfg.clone();
-        let creds = Some(self.creds.clone());
+        let Some(creds) = self.active_creds.clone() else {
+            self.push_log(LogLevel::Warn, "login required before downloading");
+            return;
+        };
+        let creds = Some(creds);
         let handle = self.manager.spawn_job(tags.clone(), cfg, creds);
         let job_id = handle.job_id;
         self.jobs.insert(
@@ -690,6 +839,7 @@ impl App {
                 total_posts,
                 skipped_existing,
                 skipped_failed,
+                limit_reached,
             } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
                     j.discovering = false;
@@ -703,7 +853,12 @@ impl App {
                 self.push_log(
                     LogLevel::Info,
                     format!(
-                        "discovery done: {total_posts} to download, {skipped_existing} existing, {skipped_failed} previously failed/unavailable"
+                        "discovery done: {total_posts} to download, {skipped_existing} existing, {skipped_failed} previously failed/unavailable{}",
+                        if limit_reached {
+                            ", per-run limit reached"
+                        } else {
+                            ""
+                        }
                     ),
                 );
             }
@@ -751,6 +906,7 @@ impl App {
                         duration_ms as f64 / 1000.0
                     ),
                 );
+                self.prune_finished_jobs();
                 self.drain_pending();
             }
             DownloadEvent::JobCancelled { job_id } => {
@@ -764,6 +920,7 @@ impl App {
                     j.handle = None;
                 }
                 self.push_log(LogLevel::Warn, "cancelled");
+                self.prune_finished_jobs();
                 self.drain_pending();
             }
             DownloadEvent::JobPaused { job_id } => {
@@ -793,8 +950,25 @@ impl App {
                     j.handle = None;
                 }
                 self.push_log(LogLevel::Error, format!("error: {error}"));
+                self.prune_finished_jobs();
                 self.drain_pending();
             }
+        }
+    }
+
+    fn prune_finished_jobs(&mut self) {
+        let mut finished: Vec<u64> = self
+            .jobs
+            .iter()
+            .filter_map(|(id, job)| job.finished.then_some(*id))
+            .collect();
+        if finished.len() <= FINISHED_JOB_CAP {
+            return;
+        }
+        finished.sort_unstable();
+        let remove_count = finished.len() - FINISHED_JOB_CAP;
+        for id in finished.into_iter().take(remove_count) {
+            self.jobs.remove(&id);
         }
     }
 
@@ -806,6 +980,7 @@ impl App {
             failed_count: st.failed.len(),
             running: self.jobs.values().any(|j| !j.finished && j.tags == q.tags),
             queued: self.pending_tags.iter().any(|t| t == &q.tags),
+            last_run: st.last_run.map(format_last_run).unwrap_or_default(),
         }
     }
 
@@ -907,6 +1082,17 @@ fn format_bps(bps: u64) -> String {
     }
 }
 
+fn format_last_run(timestamp: i64) -> String {
+    let Ok(value) = time::OffsetDateTime::from_unix_timestamp(timestamp) else {
+        return String::new();
+    };
+    value
+        .format(time::macros::format_description!(
+            "[year]-[month]-[day] [hour]:[minute] UTC"
+        ))
+        .unwrap_or_default()
+}
+
 fn build_settings_form(
     cfg: &Config,
     creds: &Credentials,
@@ -924,6 +1110,8 @@ fn build_settings_form(
         creds_loaded,
         creds_checking: false,
         creds_error: creds_err.unwrap_or_default().to_string(),
+        creds_dirty: false,
+        config_save_error: String::new(),
         site: SiteOption::from_site(cfg.site),
         download_dir: cfg.download_dir.display().to_string(),
         rating_safe: cfg.rating.safe,
@@ -932,6 +1120,7 @@ fn build_settings_form(
         skip_video: cfg.media_skip.video,
         skip_flash: cfg.media_skip.flash,
         skip_animation: cfg.media_skip.animation,
+        download_limit: DownloadLimitOption::from_limit(cfg.max_posts_per_run),
         blacklist: cfg.blacklist.join("\n"),
     }
 }
@@ -943,9 +1132,64 @@ fn parse_blacklist(s: &str) -> Vec<String> {
         .collect()
 }
 
+fn keyboard_shortcut(
+    event: iced::Event,
+    _status: iced::event::Status,
+    _window: iced::window::Id,
+) -> Option<Message> {
+    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+        key,
+        physical_key,
+        modifiers,
+        repeat,
+        ..
+    }) = event
+    else {
+        return None;
+    };
+    if repeat || !modifiers.command() {
+        return None;
+    }
+    match key.to_latin(physical_key) {
+        Some('1') => Some(Message::TabSelected(Tab::Queue)),
+        Some('2') => Some(Message::TabSelected(Tab::Settings)),
+        Some('3') => Some(Message::TabSelected(Tab::Log)),
+        Some('o') => Some(Message::OpenDownloadFolder),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_download_folder(path: &std::path::Path) -> Result<(), String> {
+    open_download_folder_with(path, "open")
+}
+
+#[cfg(target_os = "windows")]
+fn open_download_folder(path: &std::path::Path) -> Result<(), String> {
+    open_download_folder_with(path, "explorer")
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn open_download_folder(path: &std::path::Path) -> Result<(), String> {
+    open_download_folder_with(path, "xdg-open")
+}
+
+fn open_download_folder_with(path: &std::path::Path, program: &str) -> Result<(), String> {
+    std::fs::create_dir_all(path).map_err(|err| format!("create `{}`: {err}", path.display()))?;
+    let status = std::process::Command::new(program)
+        .arg(path)
+        .status()
+        .map_err(|err| format!("start {program}: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{program} exited with {status}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{App, JobPhase, JobState, Message, parse_blacklist};
+    use super::{App, FINISHED_JOB_CAP, JobPhase, JobState, Message, parse_blacklist};
     use crate::config::{Config, TagQuery};
     use crate::download::{DownloadEvent, DownloadManager};
     use crate::state::StateStore;
@@ -975,7 +1219,6 @@ mod tests {
             queries: vec![TagQuery {
                 id: 1,
                 tags: "cat".into(),
-                enabled: true,
             }],
             ..Config::default()
         };
@@ -983,27 +1226,26 @@ mod tests {
             username: "user".into(),
             api_key: "key".into(),
         };
+        let cfg_path = temp_path(&format!("config-{state_name}"));
+        let _ = std::fs::remove_file(&cfg_path);
+        let settings_form = super::build_settings_form(&cfg, &creds, true, None);
         App {
             cfg: cfg.clone(),
-            cfg_path: temp_path("config"),
+            cfg_path,
             save_token: 0,
-            creds,
-            creds_loaded_from_store: true,
-            creds_store_error: None,
+            creds: creds.clone(),
+            active_creds: Some(creds),
             creds_checking: false,
+            login_token: 0,
             state_store,
             manager: Arc::new(manager),
             jobs: HashMap::new(),
             pending_tags: VecDeque::new(),
             log_lines: VecDeque::new(),
+            removed_query: None,
             active_tab: super::Tab::Queue,
             new_query_buf: String::new(),
-            settings_form: super::build_settings_form(
-                &cfg,
-                &crate::credentials::Credentials::default(),
-                false,
-                None,
-            ),
+            settings_form,
             blacklist_content: iced::widget::text_editor::Content::new(),
             phase_tick: 0,
         }
@@ -1081,5 +1323,85 @@ mod tests {
         assert!(job.finished);
         assert!(!job.discovering);
         assert!(job.handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn credential_edits_leave_verified_credentials_active() {
+        let mut app = app_for_test("credential-draft");
+
+        let _ = app.update(Message::UsernameChanged("new-user".into()));
+
+        assert_eq!(app.creds.username, "new-user");
+        assert_eq!(
+            app.active_creds
+                .as_ref()
+                .map(|creds| creds.username.as_str()),
+            Some("user")
+        );
+        assert!(app.settings_form.creds_dirty);
+    }
+
+    #[tokio::test]
+    async fn stale_login_result_cannot_replace_verified_credentials() {
+        let mut app = app_for_test("stale-login");
+        app.login_token = 2;
+        let stale = crate::credentials::Credentials {
+            username: "stale-user".into(),
+            api_key: "stale-key".into(),
+        };
+
+        let _ = app.update(Message::LoginCompleted {
+            token: 1,
+            creds: stale,
+            result: Ok(()),
+        });
+
+        assert_eq!(
+            app.active_creds
+                .as_ref()
+                .map(|creds| creds.username.as_str()),
+            Some("user")
+        );
+    }
+
+    #[tokio::test]
+    async fn removed_query_can_be_restored() {
+        let mut app = app_for_test("undo-remove");
+
+        let _ = app.update(Message::RemoveQuery(1));
+        assert!(app.cfg.queries.is_empty());
+
+        let _ = app.update(Message::UndoRemoveQuery);
+        assert_eq!(app.cfg.queries.len(), 1);
+        assert_eq!(app.cfg.queries[0].tags, "cat");
+    }
+
+    #[tokio::test]
+    async fn clear_finished_jobs_preserves_active_jobs() {
+        let mut app = app_for_test("clear-finished");
+        let mut finished = active_job("cat", JobPhase::Finished);
+        finished.finished = true;
+        app.jobs.insert(1, finished);
+        app.jobs.insert(2, active_job("dog", JobPhase::Downloading));
+
+        let _ = app.update(Message::ClearFinishedJobs);
+
+        assert!(!app.jobs.contains_key(&1));
+        assert!(app.jobs.contains_key(&2));
+    }
+
+    #[tokio::test]
+    async fn finished_job_history_is_bounded() {
+        let mut app = app_for_test("bounded-history");
+        for id in 1..=(FINISHED_JOB_CAP as u64 + 5) {
+            let mut job = active_job("cat", JobPhase::Finished);
+            job.finished = true;
+            app.jobs.insert(id, job);
+        }
+
+        app.prune_finished_jobs();
+
+        assert_eq!(app.jobs.len(), FINISHED_JOB_CAP);
+        assert!(!app.jobs.contains_key(&1));
     }
 }

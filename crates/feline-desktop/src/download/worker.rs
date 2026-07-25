@@ -161,7 +161,7 @@ pub async fn download_post(
     Ok(final_path)
 }
 
-async fn existing_file_is_valid(
+pub(crate) async fn existing_file_is_valid(
     path: &Path,
     expected_md5: &str,
     expected_size: u64,
@@ -364,7 +364,10 @@ mod tests {
         });
 
         let poll = futures::poll!(fut.as_mut());
-        assert!(poll.is_pending(), "future must park while holding the guard");
+        assert!(
+            poll.is_pending(),
+            "future must park while holding the guard"
+        );
         assert!(path.exists(), "tmp file survives while the future is alive");
 
         drop(fut);
