@@ -9,3 +9,6 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      # Pinned in lockstep with rust-toolchain.toml and Cargo.toml's rust-version.
+      - dependency-name: dtolnay/rust-toolchain
