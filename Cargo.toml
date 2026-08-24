@@ -29,7 +29,7 @@ time = { version = "0.3.53", features = ["serde", "formatting", "macros"] }
 url = "2.5.8"
 boringtun = { version = "0.7", default-features = false }
 smoltcp = { version = "0.13.1", default-features = false, features = ["std", "log", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp"] }
-base64 = "0.22.1"
+base64 = "0.23.1"
 rand = "0.10.2"
 
 [profile.release]
