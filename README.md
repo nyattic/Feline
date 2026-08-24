@@ -35,7 +35,7 @@ Feline connects directly to e621/e926. If those sites are blocked in your networ
 
 ## Build
 
-Requires a native C toolchain. The repository includes `rust-toolchain.toml` and pins Rust 1.95.0.
+Requires a native C toolchain. The repository includes `rust-toolchain.toml` and pins Rust 1.98.0.
 
 ```bash
 cargo run --release

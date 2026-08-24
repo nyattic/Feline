@@ -561,7 +561,7 @@ fn sweep_closed(
     managed: &mut HashMap<SocketHandle, ManagedSocket>,
 ) {
     let mut to_remove = Vec::new();
-    for (handle, _) in managed.iter() {
+    for handle in managed.keys() {
         let sock = sockets.get::<tcp::Socket>(*handle);
         if matches!(sock.state(), tcp::State::Closed) {
             to_remove.push(*handle);

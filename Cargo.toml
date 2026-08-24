@@ -6,30 +6,30 @@ default-members = ["crates/feline-desktop"]
 [workspace.package]
 version = "0.4.0"
 edition = "2024"
-rust-version = "1.95.0"
+rust-version = "1.98.0"
 license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0.103"
-thiserror = "2.0.18"
-tokio = { version = "1.52.3", default-features = false }
-tokio-stream = { version = "0.1.18", default-features = false }
-futures-util = "0.3.32"
-serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", default-features = false }
+tokio-stream = { version = "0.1.19", default-features = false }
+futures-util = "0.3.34"
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.150"
-wreq = { version = "6.0.0-rc.29", default-features = false, features = ["tokio-rt", "webpki-roots", "json", "stream", "gzip", "brotli", "charset", "query", "form", "socks", "system-proxy"] }
-wreq-util = "3.0.0-rc.13"
+wreq = { version = "0.16.0", default-features = false, features = ["tokio-rt", "webpki-roots", "json", "stream", "gzip", "brotli", "charset", "query", "form", "socks", "system-proxy"] }
+wreq-util = "0.2.0"
 tracing = "0.1.44"
 governor = "0.10.4"
 backon = { version = "1.6.0", features = ["tokio-sleep"] }
 md-5 = "0.11.0"
 hex = "0.4.3"
 sha2 = "0.11.0"
-time = { version = "0.3.53", features = ["serde", "formatting", "macros"] }
+time = { version = "0.3.55", features = ["serde", "formatting", "macros"] }
 url = "2.5.8"
 boringtun = { version = "0.7", default-features = false }
-smoltcp = { version = "0.13.1", default-features = false, features = ["std", "log", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp"] }
-base64 = "0.22.1"
+smoltcp = { version = "0.14.0", default-features = false, features = ["std", "log", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp"] }
+base64 = "0.23.1"
 rand = "0.10.2"
 
 [profile.release]
