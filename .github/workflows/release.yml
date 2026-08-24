@@ -63,7 +63,7 @@ jobs:
         shell: pwsh
         run: Copy-Item target/release/feline.exe "Feline-${{ github.ref_name }}-windows-x86_64.exe"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: Feline-*.exe
@@ -109,7 +109,7 @@ jobs:
           ln -sf /Applications dmg-staging/Applications
           hdiutil create -volname "Feline" -srcfolder dmg-staging -ov -format UDZO "$DMG"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: Feline-*.dmg
@@ -172,7 +172,7 @@ jobs:
           ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage
           mv Feline*.AppImage "Feline-${{ github.ref_name }}-linux-x86_64.AppImage"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: Feline-*.AppImage
